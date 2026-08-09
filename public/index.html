@@ -1,108 +1,105 @@
 <!doctype html>
 <!--
-  index.html — the dashboard shell.
+  index.html — the app shell.
 
-  Deliberately almost empty: everything below the header is a placeholder that
-  app.js replaces once /api/tasks responds. The markup here exists to give app.js
-  stable hooks (#stats, #col-now .list, …) and to show a loading state before the
-  first fetch returns.
+  Almost everything below the nav bar is rendered by app.js; the markup here
+  provides stable hooks and a loading state. Laid out as an iOS app: nav bar
+  with a collapsing large title, a segmented filter, an inset-grouped list,
+  and a tab bar pinned to the bottom.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- Without this, phones render at ~980px wide and shrink the page to fit. -->
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- Tells the browser we support both themes, so native widgets (scrollbars,
-     form controls) match instead of staying stubbornly light. -->
+<!-- viewport-fit=cover lets the page extend under the notch and home indicator,
+     which is what makes env(safe-area-inset-*) meaningful. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>Task Inbox</title>
-<!-- Favicon as an inline SVG data URI — an emoji tab icon with no extra file. -->
+<!-- Standalone display + status-bar style, so "Add to Home Screen" on an
+     iPhone launches this without Safari chrome around it. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inbox">
+<title>Inbox</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📥</text></svg>">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<header>
-  <!-- aria-hidden on decorative elements stops screen readers announcing them. -->
-  <span class="mark" aria-hidden="true">↓</span>
-  <div class="brand">
-    <h1>Task Inbox</h1>
-    <span class="sub">forwarded → prioritised</span>
-  </div>
-  <!-- Connection indicator. app.js sets data-state to live/stale/down; the CSS
-       colours it and stops the pulse animation when it isn't live. -->
-  <span class="pulse" id="pulse" aria-hidden="true"></span>
-  <span class="sub" id="synced">connecting…</span>
-  <!-- Cycles Auto → Light → Dark. Label is rewritten by applyTheme(). -->
-  <button class="ghost" id="theme" type="button">Auto</button>
-</header>
+<div class="app">
 
-<main class="wrap">
-  <!-- Stat tiles. The four skeletons are shimmer placeholders, replaced wholesale
-       by renderStats() on first load — sized to match so nothing jumps. -->
-  <section class="stats" id="stats" aria-label="Summary">
-    <div class="skeleton" style="height:104px"></div>
-    <div class="skeleton" style="height:104px"></div>
-    <div class="skeleton" style="height:104px"></div>
-    <div class="skeleton" style="height:104px"></div>
-  </section>
-
-  <!-- A real <form>, so Enter submits natively. app.js calls preventDefault()
-       and posts via fetch instead of navigating. -->
-  <form class="capture" id="capture">
-    <div class="field">
-      <span class="icon" aria-hidden="true">✎</span>
-      <input id="capture-text" autocomplete="off" spellcheck="false"
-             placeholder="Paste a message and let Claude pull the task out…"
-             aria-label="Capture a message">
-      <!-- Hint for the "/" shortcut; CSS hides it while the field has focus. -->
-      <span class="kbd" aria-hidden="true">/</span>
+  <header id="nav">
+    <div class="nav-bar">
+      <!-- Leading: theme. Trailing: compose. Both are icon buttons, as iOS
+           prefers over labelled buttons in a nav bar. -->
+      <button class="nav-btn" id="theme" type="button" title="Theme" aria-label="Change theme"></button>
+      <span class="nav-title">Inbox</span>
+      <button class="nav-btn nav-spacer" id="compose-btn" type="button" aria-label="New task">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+      </button>
     </div>
-    <button id="capture-btn" type="submit">Add</button>
-  </form>
 
-  <!-- The three priority columns. Each id (#col-now …) matches a key in app.js's
-       BUCKET map, and data-bucket drives the accent colour in CSS. Cards go into
-       .list; the skeletons are placeholders for the first paint. -->
-  <div class="columns">
-    <section class="col" id="col-now" data-bucket="now">
-      <div class="col-head">
-        <span class="bar" aria-hidden="true"></span>
-        <span class="name">Now</span>
-        <span class="hint"></span><!-- count, filled in by renderColumns() -->
-      </div>
-      <div class="list"><div class="skeleton"></div><div class="skeleton"></div></div>
-    </section>
+    <!-- The large title. #nav.scrolled fades this out and the inline one in. -->
+    <div class="large-title-wrap">
+      <h1 class="large-title" id="page-title">Inbox</h1>
+      <p class="subtitle" id="synced">Updating…</p>
+    </div>
 
-    <section class="col" id="col-soon" data-bucket="soon">
-      <div class="col-head">
-        <span class="bar" aria-hidden="true"></span>
-        <span class="name">Soon</span>
-        <span class="hint"></span>
-      </div>
-      <div class="list"><div class="skeleton"></div></div>
-    </section>
+    <!-- Segmented filter. The sliding thumb is positioned by app.js. -->
+    <div class="seg" id="seg" role="tablist">
+      <div class="seg-thumb" id="seg-thumb"></div>
+      <button data-filter="all" class="on" role="tab">All</button>
+      <button data-filter="now" role="tab">Now</button>
+      <button data-filter="soon" role="tab">Soon</button>
+      <button data-filter="later" role="tab">Later</button>
+    </div>
+  </header>
 
-    <section class="col" id="col-later" data-bucket="later">
-      <div class="col-head">
-        <span class="bar" aria-hidden="true"></span>
-        <span class="name">Later</span>
-        <span class="hint"></span>
+  <main id="main">
+    <section class="widget" id="summary" aria-label="Summary"></section>
+    <div id="content">
+      <!-- Skeleton rows shown until the first fetch resolves. -->
+      <div class="list">
+        <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       </div>
-      <div class="list"><div class="skeleton"></div></div>
-    </section>
+    </div>
+    <p class="list-footer" id="list-footer"></p>
+  </main>
+
+  <!-- Two tabs: the open inbox and the completed archive. -->
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="inbox" class="on" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 13h4l2 3h6l2-3h4"/>
+        <path d="M5 5h14l2 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z"/>
+      </svg>
+      Inbox
+    </button>
+    <button data-tab="done" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/>
+      </svg>
+      Completed
+    </button>
+  </nav>
+
+  <!-- Compose sheet, hidden off-screen until .on is added. -->
+  <div class="backdrop" id="backdrop"></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="New task">
+    <div class="grabber" aria-hidden="true"></div>
+    <h2>New task</h2>
+    <textarea id="compose-text"
+              placeholder="Paste a message — Claude works out the task, deadline and priority."></textarea>
+    <button class="btn-primary" id="compose-submit" type="button">Add</button>
+    <button class="btn-plain" id="compose-cancel" type="button">Cancel</button>
   </div>
 
-  <!-- <details> gives collapse/expand with no JavaScript at all. -->
-  <details class="done-panel">
-    <summary>Completed<span id="done-count"></span></summary>
-    <div id="done-list"></div>
-  </details>
-</main>
+</div>
 
-<!-- Loaded at the end of <body> so every element above already exists when the
-     script runs — app.js queries the DOM immediately, with no DOMContentLoaded
-     wrapper. -->
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,387 +1,424 @@
 /* ---------------------------------------------------------------------------
-   Task Inbox — design tokens
+   Task Inbox — iOS-style UI
    ---------------------------------------------------------------------------
-   Every colour is a CSS custom property ("variable") declared here and used by
-   role below, so a theme swap changes one block instead of a hundred rules.
+   Built around Apple's Human Interface Guidelines conventions: the semantic
+   colour system (systemBackground / label / separator rather than raw hex used
+   directly), SF Pro type scale, inset-grouped lists, a collapsing large title,
+   swipe actions, and a translucent tab bar.
 
-   The theme is declared in THREE places on purpose:
-     1. bare :root                        → the light palette, the default
-     2. @media (prefers-color-scheme:dark)→ follows the operating system
-     3. :root[data-theme="dark"]          → the in-page toggle, which must be
-                                            able to override the OS either way
-   The :not([data-theme="light"]) guard on (2) is what lets someone on a
-   dark-mode OS still force light mode with the toggle.
+   Themes are declared in three scopes, as before:
+     1. bare :root                         → light, the default
+     2. @media (prefers-color-scheme:dark) → follows the OS
+     3. :root[data-theme="dark"]           → the in-app toggle, which must beat
+                                             the OS in both directions
 --------------------------------------------------------------------------- */
 
 :root {
   color-scheme: light;
 
-  --surface-0: #f4f3f0;   /* page */
-  --surface-1: #fcfcfb;   /* cards — the validated chart surface */
-  --surface-2: #eeede9;   /* insets, tracks, hover */
-  --line:      #e3e2dd;
-  --line-2:    #cfcec8;
+  /* iOS semantic backgrounds. In light mode a grouped list sits on grey with
+     white cells; dark mode inverts that relationship (black page, grey cells). */
+  --bg-grouped:   #f2f2f7;  /* systemGroupedBackground — the page */
+  --bg-cell:      #ffffff;  /* the list cells and cards */
+  --bg-cell-2:    #f2f2f7;  /* insets inside a cell */
+  --bg-tint:      rgb(120 120 128 / .12); /* fills: segmented control, chips */
+  --bg-tint-2:    rgb(120 120 128 / .20);
 
-  --text-1: #0b0b0b;
-  --text-2: #52514e;
-  --text-3: #85847d;
+  /* Label hierarchy. iOS uses translucent greys so text sits correctly on any
+     background rather than being fixed to one surface colour. */
+  --label:        #000000;
+  --label-2:      rgb(60 60 67 / .60);
+  --label-3:      rgb(60 60 67 / .30);
+  --separator:    rgb(60 60 67 / .29);
 
-  --accent:    #2a78d6;
-  --accent-in: #ffffff;
+  /* System colours (light variants). */
+  --blue:   #007aff;
+  --red:    #ff3b30;
+  --orange: #ff9500;
+  --green:  #34c759;
+  --yellow: #ffcc00;
+  --purple: #af52de;
+  --pink:   #ff2d55;
+  --indigo: #5856d6;
+  --teal:   #30b0c7;
 
-  /* Status — the Now/Soon/Later severity scale. These four are NOT themed:
-     they mean the same thing in both modes, and each already clears contrast
-     on both surfaces. Always paired with a text label, never colour alone. */
-  --now:   #d03b3b;
-  --soon:  #fab219;
-  --later: #0ca30c;
+  --tint: var(--blue);        /* the app's accent — iOS calls this the tint */
+  --on-tint: #ffffff;
 
-  /* Category identity colours, in a fixed order chosen so that adjacent hues
-     stay distinguishable to colour-blind readers. Assigned per category and
-     never reassigned by rank — a category keeps its colour as the list moves. */
-  --cat-work:     #2a78d6;
-  --cat-personal: #eb6834;
-  --cat-finance:  #1baf7a;
-  --cat-errand:   #eda100;
-  --cat-social:   #e87ba4;
-  --cat-health:   #008300;
-  --cat-other:    #4a3aa7;
+  /* Priority. Red/orange/green is the conventional severity ramp; each is
+     always paired with a text label, never colour alone. */
+  --now:   var(--red);
+  --soon:  var(--orange);
+  --later: var(--green);
 
-  --radius:    14px;
-  --radius-sm: 9px;
-  --shadow:    0 1px 2px rgb(0 0 0 / .05), 0 8px 24px -12px rgb(0 0 0 / .14);
-  --ease:      cubic-bezier(.22, .61, .36, 1);
+  /* iOS corner radii: 10 for list cells, 14 for cards, 12 for controls. */
+  --r-cell: 10px;
+  --r-card: 14px;
+  --r-ctl: 9px;
+
+  /* The standard iOS ease — a gentle spring-like curve. */
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --nav-h: 44px; /* standard iOS navigation bar height */
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-
-    --surface-0: #121211;
-    --surface-1: #1a1a19;
-    --surface-2: #242423;
-    --line:      #2e2e2c;
-    --line-2:    #3d3d3a;
-
-    --text-1: #ffffff;
-    --text-2: #c3c2b7;
-    --text-3: #8d8c84;
-
-    --accent:    #3987e5;
-    --accent-in: #ffffff;
-
-    --cat-work:     #3987e5;
-    --cat-personal: #d95926;
-    --cat-finance:  #199e70;
-    --cat-errand:   #c98500;
-    --cat-social:   #d55181;
-    --cat-health:   #008300;
-    --cat-other:    #9085e9;
-
-    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 30px -14px rgb(0 0 0 / .7);
+    --bg-grouped: #000000;
+    --bg-cell:    #1c1c1e;
+    --bg-cell-2:  #2c2c2e;
+    --bg-tint:    rgb(120 120 128 / .24);
+    --bg-tint-2:  rgb(120 120 128 / .32);
+    --label:      #ffffff;
+    --label-2:    rgb(235 235 245 / .60);
+    --label-3:    rgb(235 235 245 / .30);
+    --separator:  rgb(84 84 88 / .65);
+    /* Dark-mode system colours are brighter, so they stay legible on black. */
+    --blue:   #0a84ff;
+    --red:    #ff453a;
+    --orange: #ff9f0a;
+    --green:  #30d158;
+    --yellow: #ffd60a;
+    --purple: #bf5af2;
+    --pink:   #ff375f;
+    --indigo: #5e5ce6;
+    --teal:   #40c8e0;
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-
-  --surface-0: #121211;
-  --surface-1: #1a1a19;
-  --surface-2: #242423;
-  --line:      #2e2e2c;
-  --line-2:    #3d3d3a;
-
-  --text-1: #ffffff;
-  --text-2: #c3c2b7;
-  --text-3: #8d8c84;
-
-  --accent:    #3987e5;
-  --accent-in: #ffffff;
-
-  --cat-work:     #3987e5;
-  --cat-personal: #d95926;
-  --cat-finance:  #199e70;
-  --cat-errand:   #c98500;
-  --cat-social:   #d55181;
-  --cat-health:   #008300;
-  --cat-other:    #9085e9;
-
-  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 30px -14px rgb(0 0 0 / .7);
+  --bg-grouped: #000000;
+  --bg-cell:    #1c1c1e;
+  --bg-cell-2:  #2c2c2e;
+  --bg-tint:    rgb(120 120 128 / .24);
+  --bg-tint-2:  rgb(120 120 128 / .32);
+  --label:      #ffffff;
+  --label-2:    rgb(235 235 245 / .60);
+  --label-3:    rgb(235 235 245 / .30);
+  --separator:  rgb(84 84 88 / .65);
+  --blue:   #0a84ff;
+  --red:    #ff453a;
+  --orange: #ff9f0a;
+  --green:  #30d158;
+  --yellow: #ffd60a;
+  --purple: #bf5af2;
+  --pink:   #ff375f;
+  --indigo: #5e5ce6;
+  --teal:   #40c8e0;
 }
 
 /* --------------------------------------------------------------------- base */
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 body {
   margin: 0;
-  /* A faint accent glow behind the page. color-mix() blends two colours at
-     runtime — here 11% accent into transparent — so the tint follows whatever
-     --accent the active theme set, with no second hard-coded value. */
-  background:
-    radial-gradient(1100px 520px at 12% -12%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 70%),
-    var(--surface-0);
-  background-attachment: fixed;
-  color: var(--text-1);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  background: var(--bg-grouped);
+  color: var(--label);
+  /* -apple-system resolves to SF Pro on Apple devices; the rest are fallbacks
+     for everywhere else. Nothing is downloaded, so text paints immediately. */
+  font: 17px/1.29 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+        system-ui, "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -.01em; /* SF is slightly tight at body size */
+  overscroll-behavior-y: none;
 }
 
-.wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px 72px; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+:focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; border-radius: 6px; }
 
-button { font: inherit; cursor: pointer; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+/* On a phone this fills the screen; on a desktop it stays a phone-width column,
+   which is how Apple's own web apps present iPhone-shaped UIs. */
+.app { max-width: 560px; margin: 0 auto; min-height: 100dvh; }
 
-/* ------------------------------------------------------------------- header */
+/* ---------------------------------------------------------------- nav bar */
 
-header {
-  position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; gap: 14px;
-  padding: 16px 24px;
-  /* Semi-transparent + blur = content scrolls under a frosted header. */
-  background: color-mix(in oklab, var(--surface-0) 82%, transparent);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--line);
-}
-.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
-.brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
-.brand .sub { color: var(--text-3); font-size: 12.5px; }
-@media (max-width: 620px) {
-  .brand .sub { display: none; }
-  header { padding: 12px 16px; gap: 10px; }
-  .wrap { padding: 0 16px 56px; }
+#nav {
+  position: sticky; top: 0; z-index: 30;
+  /* The iOS translucent chrome: a heavily blurred, saturated backdrop so
+     content tints the bar as it scrolls underneath. */
+  background: color-mix(in srgb, var(--bg-grouped) 80%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
 }
 
-.mark {
-  width: 26px; height: 26px; border-radius: 8px; align-self: center;
-  background: linear-gradient(140deg, var(--accent), color-mix(in oklab, var(--accent) 45%, var(--cat-other)));
-  display: grid; place-items: center; color: #fff; font-size: 14px;
+.nav-bar {
+  height: var(--nav-h);
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px;
 }
 
-.ghost {
-  background: transparent; border: 1px solid var(--line);
-  color: var(--text-2); border-radius: 9px; padding: 6px 11px; font-size: 13px;
-  transition: border-color .15s var(--ease), color .15s var(--ease);
+/* The inline title appears only once the large title has scrolled away — the
+   signature iOS large-title transition. */
+.nav-title {
+  position: absolute; left: 50%; translate: -50% 0;
+  font-size: 17px; font-weight: 600; letter-spacing: -.02em;
+  opacity: 0; transition: opacity .2s var(--ease);
+  pointer-events: none;
 }
-.ghost:hover { border-color: var(--line-2); color: var(--text-1); }
+#nav.scrolled .nav-title { opacity: 1; }
+#nav.scrolled { border-bottom: .5px solid var(--separator); }
 
-.pulse {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--later);
-  box-shadow: 0 0 0 0 color-mix(in oklab, var(--later) 60%, transparent);
-  animation: pulse 2.4s infinite;
+.nav-btn {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--tint);
+  transition: background .15s var(--ease), scale .1s var(--ease);
 }
-.pulse[data-state="stale"] { background: var(--soon); animation: none; }
-.pulse[data-state="down"]  { background: var(--now);  animation: none; }
-@keyframes pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--later) 55%, transparent); }
-  70%  { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
+.nav-btn:hover { background: var(--bg-tint); }
+.nav-btn:active { scale: .9; } /* stands in for the tap feedback of a real device */
+.nav-spacer { margin-left: auto; }
 
-/* -------------------------------------------------------------- stat strip */
-
-.stats {
-  display: grid; gap: 12px; margin: 26px 0 18px;
-  grid-template-columns: 1.4fr repeat(3, 1fr);
+.large-title-wrap {
+  padding: 0 16px 6px;
+  transform-origin: left center;
+  transition: opacity .2s var(--ease), translate .2s var(--ease);
 }
-@media (max-width: 800px) { .stats { grid-template-columns: 1fr 1fr; } }
+#nav.scrolled .large-title-wrap { opacity: 0; translate: 0 -6px; }
+/* iOS Large Title: 34px, bold, tight tracking. */
+.large-title { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.028em; }
+.subtitle { margin: 2px 0 0; font-size: 13px; color: var(--label-2); }
 
-.tile {
-  background: var(--surface-1); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 16px 18px;
-}
-.tile .label {
-  font-size: 11.5px; text-transform: uppercase; letter-spacing: .09em;
-  color: var(--text-3); display: flex; align-items: center; gap: 7px;
-}
-.tile .value { font-size: 30px; font-weight: 640; letter-spacing: -.02em; margin-top: 6px; }
-.tile.hero .value { font-size: 48px; line-height: 1.05; }
-.tile .foot { color: var(--text-3); font-size: 12.5px; margin-top: 2px; }
-.swatch { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+/* --------------------------------------------------- segmented control */
 
-/* ------------------------------------------------------------------ capture */
-
-.capture { display: flex; gap: 10px; margin-bottom: 26px; }
-.capture .field { position: relative; flex: 1; }
-.capture input {
-  width: 100%; padding: 13px 15px 13px 40px;
-  background: var(--surface-1); border: 1px solid var(--line);
-  border-radius: var(--radius-sm); color: var(--text-1); font-size: 14.5px;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+/* iOS segmented control: a tinted track with a white "thumb" that carries a
+   small shadow and slides between segments. */
+.seg {
+  display: flex; gap: 2px; margin: 4px 16px 10px;
+  background: var(--bg-tint); border-radius: var(--r-ctl); padding: 2px;
+  position: relative;
 }
-.capture input::placeholder { color: var(--text-3); }
-.capture input:focus {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+.seg button {
+  flex: 1; padding: 6px 0; font-size: 13px; font-weight: 590;
+  border-radius: 7px; color: var(--label); position: relative; z-index: 1;
+  transition: opacity .2s var(--ease);
 }
-.capture .icon {
-  position: absolute; left: 14px; top: 50%; translate: 0 -50%;
-  color: var(--text-3); pointer-events: none; font-size: 14px;
-}
-.capture .kbd {
-  position: absolute; right: 12px; top: 50%; translate: 0 -50%;
-  font-size: 11px; color: var(--text-3); border: 1px solid var(--line);
-  border-radius: 5px; padding: 1px 6px; pointer-events: none;
-}
-.capture input:focus ~ .kbd { opacity: 0; }
-.capture button {
-  background: var(--accent); color: var(--accent-in); border: 0;
-  border-radius: var(--radius-sm); padding: 0 20px; font-weight: 550;
-  transition: filter .15s var(--ease);
-}
-.capture button:hover:not(:disabled) { filter: brightness(1.08); }
-.capture button:disabled { opacity: .55; cursor: progress; }
-
-/* ------------------------------------------------------------------ columns */
-
-.columns { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); align-items: start; }
-@media (max-width: 940px) { .columns { grid-template-columns: 1fr; } }
-
-.col-head {
-  display: flex; align-items: center; gap: 9px;
-  padding: 0 2px 11px; border-bottom: 1px solid var(--line); margin-bottom: 14px;
-}
-.col-head .name { font-size: 13px; font-weight: 620; letter-spacing: .01em; }
-.col-head .hint { color: var(--text-3); font-size: 12px; margin-left: auto; }
-.col-head .bar { width: 22px; height: 3px; border-radius: 2px; }
-.col[data-bucket="now"]   .bar { background: var(--now); }
-.col[data-bucket="soon"]  .bar { background: var(--soon); }
-.col[data-bucket="later"] .bar { background: var(--later); }
-
-/* -------------------------------------------------------------------- cards */
-
-.card {
-  position: relative; overflow: hidden;
-  background: var(--surface-1); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 14px 16px 13px; margin-bottom: 11px;
-  box-shadow: var(--shadow);
-  transition: transform .18s var(--ease), border-color .18s var(--ease);
-  animation: rise .28s var(--ease) both;
-}
-.card:hover { transform: translateY(-2px); border-color: var(--line-2); }
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-
-/* The coloured spine down the left edge of each card.
-   ::before injects a pseudo-element with no extra markup; inset: 0 auto 0 0 is
-   shorthand for top/bottom 0, left 0, right auto — a full-height 3px strip.
-   var(--tone, fallback) uses --tone when a data-bucket rule below has set it. */
-.card::before {
-  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
-  background: var(--tone, var(--line-2));
-}
-.card[data-bucket="now"]   { --tone: var(--now); }
-.card[data-bucket="soon"]  { --tone: var(--soon); }
-.card[data-bucket="later"] { --tone: var(--later); }
-
-.card .row { display: flex; align-items: flex-start; gap: 10px; }
-.card .title { font-weight: 570; letter-spacing: -.005em; flex: 1; }
-.card .id { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12.5px; }
-.card .details {
-  color: var(--text-2); font-size: 13.5px; margin-top: 7px;
-  /* Truncate to 3 lines with an ellipsis. The -webkit- prefixes look obsolete
-     but remain the only cross-browser way to clamp by line count. */
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+.seg button:not(.on) { color: var(--label-2); }
+.seg button .n { font-weight: 400; opacity: .55; margin-left: 3px; }
+.seg-thumb {
+  position: absolute; top: 2px; bottom: 2px; z-index: 0;
+  background: var(--bg-cell); border-radius: 7px;
+  box-shadow: 0 3px 8px rgb(0 0 0 / .12), 0 1px 1px rgb(0 0 0 / .04);
+  transition: left .28s var(--ease), width .28s var(--ease);
 }
 
-/* The score meter. The fill carries severity (the bucket's colour) and the
-   track is that same colour mixed down into the surface — so the bar reads as
-   one object at a glance rather than two unrelated colours. Width is set
-   inline by app.js as a percentage of the 0-100 score. */
-.meter { margin-top: 11px; display: flex; align-items: center; gap: 9px; }
-.meter .track {
-  flex: 1; height: 4px; border-radius: 999px;
-  background: color-mix(in oklab, var(--tone) 18%, var(--surface-2));
-  overflow: hidden;
+/* ------------------------------------------------------------------ main */
+
+main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
+
+/* Section headers in grouped lists: small, grey, and inset to match the cells. */
+.section-head {
+  display: flex; align-items: baseline; gap: 6px;
+  margin: 22px 4px 7px; font-size: 13px; color: var(--label-2);
 }
-.meter .fill {
-  height: 100%; border-radius: 999px; background: var(--tone);
-  transition: width .5s var(--ease);
+.section-head .dot { width: 8px; height: 8px; border-radius: 50%; }
+.section-head .count { margin-left: auto; color: var(--label-3); }
+
+/* ---------------------------------------------------------------- widget */
+
+/* Summary card, styled after an iOS home-screen widget. */
+.widget {
+  background: var(--bg-cell); border-radius: var(--r-card);
+  padding: 14px 16px; margin-top: 8px;
+  display: grid; grid-template-columns: repeat(3, 1fr);
 }
-.meter .num {
-  font-size: 11.5px; color: var(--text-3);
-  font-variant-numeric: tabular-nums; min-width: 20px; text-align: right;
+.widget .stat { text-align: left; }
+.widget .stat + .stat { border-left: .5px solid var(--separator); padding-left: 14px; }
+.widget .n { font-size: 26px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
+.widget .k {
+  font-size: 12px; color: var(--label-2); margin-top: 1px;
+  display: flex; align-items: center; gap: 5px;
+}
+.widget .k i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+/* ------------------------------------------------------- inset grouped list */
+
+.list {
+  background: var(--bg-cell); border-radius: var(--r-card);
+  overflow: hidden; /* clips the swipe layer to the rounded corners */
 }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
-.chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
-  background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2);
-  white-space: nowrap;
-}
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--text-3)); }
-.chip.danger { color: var(--now); border-color: color-mix(in oklab, var(--now) 45%, var(--line)); }
-.chip.who { color: var(--text-2); }
+/* Each row sits in a clipping container; .row slides left to reveal .swipe. */
+.cell { position: relative; overflow: hidden; background: var(--bg-cell); }
 
-/* Action buttons rest at half opacity and come up on hover: present enough to
-   be discoverable, quiet enough not to compete with the task text. They stay
-   in the layout at all times so the card never changes height. */
-.actions {
-  display: flex; gap: 6px; margin-top: 12px;
-  opacity: .5; transition: opacity .16s var(--ease);
+.row {
+  position: relative; z-index: 1; background: var(--bg-cell);
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 11px 14px 11px 14px;
+  touch-action: pan-y; /* let the page scroll vertically; we own horizontal */
+  transition: translate .32s var(--ease);
+  user-select: none;
 }
-.card:hover .actions, .card:focus-within .actions { opacity: 1; }
-/* Touch devices have no hover, so show the buttons fully there. */
-@media (hover: none) { .actions { opacity: 1; } }
+/* --swipe-w is set per cell by app.js from the number of action buttons, so a
+   row with two actions doesn't slide far enough to expose an empty gap. */
+.cell.open .row { translate: calc(-1 * var(--swipe-w, 136px)) 0; }
+.cell.dragging .row { transition: none; } /* follow the finger 1:1 while dragging */
 
-.actions button {
-  flex: 1; background: transparent; border: 1px solid var(--line);
-  color: var(--text-2); border-radius: 8px; padding: 6px 0; font-size: 12.5px;
-  transition: background .14s var(--ease), color .14s var(--ease), border-color .14s var(--ease);
+/* Hairline separator, inset to align with the text rather than the icon —
+   the detail that makes a list read as iOS rather than generic. */
+.cell + .cell .row::before {
+  content: ""; position: absolute; left: 58px; right: 0; top: 0;
+  height: .5px; background: var(--separator);
 }
-.actions button:hover { background: var(--surface-2); color: var(--text-1); border-color: var(--line-2); }
-.actions button.done:hover { color: var(--later); border-color: color-mix(in oklab, var(--later) 50%, var(--line)); }
-.actions button.drop:hover { color: var(--now);   border-color: color-mix(in oklab, var(--now) 50%, var(--line)); }
 
-/* Applied by app.js the moment an action button is clicked, before the server
-   has replied — the card slides away immediately and is restored if the
-   request fails. 'forwards' holds the final frame instead of snapping back. */
-.card.leaving { animation: leave .22s var(--ease) forwards; }
-@keyframes leave { to { opacity: 0; transform: translateX(14px) scale(.98); } }
+/* The completion circle, as in Reminders. */
+.check {
+  flex: none; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%;
+  border: 1.8px solid var(--label-3);
+  display: grid; place-items: center;
+  transition: background .2s var(--ease), border-color .2s var(--ease), scale .12s var(--ease);
+}
+.check:active { scale: .86; }
+.check svg { opacity: 0; transition: opacity .15s var(--ease); }
+.check.on { background: var(--tint); border-color: var(--tint); }
+.check.on svg { opacity: 1; }
 
-/* ------------------------------------------------------------------- states */
+/* Category badge: a rounded-square coloured tile with a distinct glyph.
+   The glyph is deliberate — Apple's green and orange are close enough under
+   some colour-blindness that colour alone would not distinguish them. */
+.cat {
+  flex: none; width: 28px; height: 28px; border-radius: 7px;
+  display: grid; place-items: center; color: #fff;
+}
+.cat svg { width: 16px; height: 16px; }
 
-.empty {
-  border: 1px dashed var(--line); border-radius: var(--radius);
-  padding: 22px 16px; text-align: center; color: var(--text-3); font-size: 13px;
+.row .body { flex: 1; min-width: 0; } /* min-width:0 lets long text ellipsis */
+.row .t { font-size: 17px; letter-spacing: -.02em; }
+.row.done .t { color: var(--label-2); text-decoration: line-through; }
+.row .sub {
+  font-size: 13px; color: var(--label-2); margin-top: 2px;
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
 }
-/* Loading placeholder: a gradient wider than the element, animated across it
-   to give the familiar shimmer. */
-.skeleton {
-  height: 92px; border-radius: var(--radius); margin-bottom: 11px;
-  background: linear-gradient(100deg, var(--surface-1) 30%, var(--surface-2) 50%, var(--surface-1) 70%);
-  background-size: 220% 100%; animation: shimmer 1.4s infinite linear;
+.row .sub .sep { color: var(--label-3); }
+.row .sub .due.late { color: var(--red); }
+.row .sub .who { color: var(--label-2); }
+.row .detail {
+  font-size: 13px; color: var(--label-2); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-@keyframes shimmer { to { background-position: -220% 0; } }
 
-.done-panel { margin-top: 34px; }
-.done-panel summary {
-  cursor: pointer; color: var(--text-3); font-size: 13px;
-  padding: 10px 0; border-top: 1px solid var(--line); list-style: none;
-}
-.done-panel summary::-webkit-details-marker { display: none; }
-.done-panel summary::before {
-  content: "▸"; display: inline-block; margin-right: 8px;
-  transition: rotate .2s var(--ease);
-}
-.done-panel[open] summary::before { rotate: 90deg; }
-.done-row {
-  display: flex; gap: 10px; align-items: center;
-  color: var(--text-3); font-size: 13.5px; padding: 5px 2px;
-}
-.done-row .t { text-decoration: line-through; }
+/* Priority pip + score, right-aligned like an iOS accessory view. */
+.row .acc { flex: none; display: flex; align-items: center; gap: 7px; padding-top: 2px; }
+.row .score { font-size: 13px; color: var(--label-3); font-variant-numeric: tabular-nums; }
+.row .pip { width: 8px; height: 8px; border-radius: 50%; }
 
+/* Swipe actions sit behind the row and are uncovered as it slides. */
+.swipe { position: absolute; inset: 0 0 0 auto; display: flex; z-index: 0; }
+.swipe button {
+  width: 68px; display: grid; place-items: center; gap: 3px;
+  color: #fff; font-size: 11px; font-weight: 500;
+}
+.swipe .snooze { background: var(--orange); }
+.swipe .drop   { background: var(--red); }
+.swipe .undo   { background: var(--blue); }
+.swipe svg { width: 19px; height: 19px; }
+
+.cell.removing { transition: height .3s var(--ease), opacity .2s var(--ease); overflow: hidden; }
+
+/* ------------------------------------------------------------ empty state */
+
+.empty { text-align: center; padding: 56px 24px; color: var(--label-2); }
+.empty .glyph { color: var(--label-3); margin-bottom: 10px; }
+.empty h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; color: var(--label); }
+.empty p { margin: 0; font-size: 14px; }
+
+.list-footer { text-align: center; font-size: 13px; color: var(--label-3); margin: 14px 0 0; }
+
+/* ------------------------------------------------------------- compose sheet */
+
+/* iOS sheets slide up from the bottom, round only their top corners, and carry
+   a "grabber" bar at the top. The backdrop dims the content behind. */
+.backdrop {
+  position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / .4);
+  opacity: 0; pointer-events: none; transition: opacity .3s var(--ease);
+}
+.backdrop.on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  max-width: 560px; margin: 0 auto;
+  background: var(--bg-cell);
+  border-radius: 14px 14px 0 0;
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  translate: 0 100%; transition: translate .35s var(--ease);
+}
+.sheet.on { translate: 0 0; }
+.grabber {
+  width: 36px; height: 5px; border-radius: 3px; background: var(--label-3);
+  margin: 0 auto 12px;
+}
+.sheet h2 { margin: 0 0 12px; font-size: 20px; font-weight: 650; letter-spacing: -.02em; }
+.sheet textarea {
+  width: 100%; min-height: 96px; resize: none;
+  background: var(--bg-cell-2); border: 0; border-radius: var(--r-cell);
+  padding: 12px; color: var(--label); font: inherit; font-size: 16px;
+}
+.sheet textarea::placeholder { color: var(--label-3); }
+.sheet textarea:focus { outline: 2px solid var(--tint); outline-offset: 0; }
+
+/* Full-width filled button — the standard iOS primary action. */
+.btn-primary {
+  width: 100%; margin-top: 12px; padding: 14px;
+  background: var(--tint); color: var(--on-tint);
+  border-radius: var(--r-cell); font-size: 17px; font-weight: 600;
+  transition: opacity .15s var(--ease), scale .1s var(--ease);
+}
+.btn-primary:active { scale: .985; }
+.btn-primary:disabled { opacity: .45; cursor: progress; }
+.btn-plain {
+  width: 100%; margin-top: 6px; padding: 12px; color: var(--tint);
+  font-size: 17px; border-radius: var(--r-cell);
+}
+
+/* ---------------------------------------------------------------- tab bar */
+
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  max-width: 560px; margin: 0 auto;
+  display: flex;
+  padding-bottom: env(safe-area-inset-bottom); /* clears the home indicator */
+  background: color-mix(in srgb, var(--bg-cell) 80%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-top: .5px solid var(--separator);
+}
+.tabbar button {
+  flex: 1; padding: 7px 0 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 10px; letter-spacing: 0; color: var(--label-2);
+  transition: color .15s var(--ease);
+}
+.tabbar button.on { color: var(--tint); }
+.tabbar svg { width: 25px; height: 25px; }
+
+/* ------------------------------------------------------------------ toast */
+
+/* Small floating capsule, iOS-style, above the tab bar. */
 .toast {
-  position: fixed; left: 50%; bottom: 26px; translate: -50% 0; z-index: 50;
-  background: var(--surface-1); border: 1px solid var(--line);
-  border-left: 3px solid var(--now);
-  border-radius: 10px; padding: 11px 16px; box-shadow: var(--shadow);
-  font-size: 13.5px; max-width: min(92vw, 460px);
-  animation: rise .2s var(--ease) both;
+  position: fixed; left: 50%; translate: -50% 0; bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 60; max-width: min(90vw, 420px);
+  background: var(--bg-cell); color: var(--label);
+  border: .5px solid var(--separator); border-radius: 22px;
+  padding: 11px 18px; font-size: 14px; text-align: center;
+  box-shadow: 0 8px 30px rgb(0 0 0 / .18);
+  animation: pop .28s var(--ease) both;
 }
+@keyframes pop { from { opacity: 0; translate: -50% 10px; scale: .96; } }
 
-/* Respect the OS "reduce motion" setting — animation can cause nausea or
-   migraines for some people, so honour it rather than treating it as optional. */
+/* Skeleton rows while the first fetch is in flight. */
+.skeleton { height: 62px; background: var(--bg-cell); position: relative; overflow: hidden; }
+.skeleton + .skeleton::before {
+  content: ""; position: absolute; left: 58px; right: 0; top: 0; height: .5px;
+  background: var(--separator);
+}
+.skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--bg-tint), transparent);
+  animation: shimmer 1.3s infinite;
+}
+@keyframes shimmer { from { translate: -100% 0; } to { translate: 100% 0; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
