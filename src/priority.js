@@ -136,14 +136,16 @@ function formatDuration(ms) {
  * fake.
  */
 async function rescoreOpenTasks(dbModule, now = Date.now()) {
-  const open = await dbModule.listTasksByStatus('open');
-  const snoozed = await dbModule.listTasksByStatus('snoozed');
+  // Deliberately across all accounts: this is a timer, not a request, and every
+  // user's deadlines advance at the same rate.
+  const open = await dbModule.listTasksByStatusAllUsers('open');
+  const snoozed = await dbModule.listTasksByStatusAllUsers('snoozed');
   let changed = 0;
 
   // Wake expired snoozes first, then score them in the same pass below.
   for (const task of snoozed) {
     if (task.snooze_until && task.snooze_until <= now) {
-      await dbModule.updateTaskFields(task.id, { status: 'open', snooze_until: null });
+      await dbModule.updateTaskFields(task.user_id, task.id, { status: 'open', snooze_until: null });
       open.push({ ...task, status: 'open', snooze_until: null });
     }
   }

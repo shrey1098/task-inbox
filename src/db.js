@@ -8,10 +8,18 @@
 // databases, or stubbing storage in a test, only touches this file.
 //
 // Three collections:
+//   users    — accounts; each owns its own tasks and links one Telegram chat
+//   sessions — active logins (token hashes only, never the raw token)
 //   messages — every inbound message, raw, exactly as received
 //   tasks    — what the extractor found inside those messages
-//   state    — small key/value scratchpad (Telegram poll offset, pinned chat)
+//   state    — small key/value scratchpad (Telegram poll offset)
 //   counters — internal, powers the friendly integer ids (see nextId)
+//
+// Multi-tenancy rule: every task and message carries a user_id, and every
+// query below that reads them takes a userId and filters on it. That filter is
+// the tenant boundary — a missing one would leak another account's tasks, so
+// the functions require it as the first argument rather than accepting an
+// optional filter that is easy to forget.
 // ---------------------------------------------------------------------------
 
 const { MongoClient } = require('mongodb');
@@ -57,9 +65,23 @@ async function connect() {
   // the order matters because an index can serve both filtering and sorting
   // only if its fields line up with the query's filter + sort.
   await db.collection('messages').createIndex({ status: 1, id: 1 });
-  await db.collection('tasks').createIndex({ status: 1, score: -1 }); // listTasksByStatus
+  await db.collection('messages').createIndex({ user_id: 1, id: -1 });
+  // user_id leads the compound index because every task query filters on it.
+  await db.collection('tasks').createIndex({ user_id: 1, status: 1, score: -1 });
   await db.collection('tasks').createIndex({ id: 1 }, { unique: true });
   await db.collection('state').createIndex({ key: 1 }, { unique: true });
+
+  await db.collection('users').createIndex({ email: 1 }, { unique: true });
+  // sparse: only documents that HAVE a tg_chat_id take part, so the many users
+  // with none don't all collide on null.
+  await db.collection('users').createIndex({ tg_chat_id: 1 }, { unique: true, sparse: true });
+  await db.collection('users').createIndex({ link_code: 1 }, { sparse: true });
+
+  await db.collection('sessions').createIndex({ token_hash: 1 }, { unique: true });
+  await db.collection('sessions').createIndex({ user_id: 1 });
+  // A TTL index: Mongo deletes each session automatically once expires_at
+  // passes, so expired rows don't accumulate forever.
+  await db.collection('sessions').createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
   return db;
 }
@@ -83,7 +105,7 @@ async function close() {
  */
 async function ensureCounters() {
   const counters = db.collection('counters');
-  for (const name of ['messages', 'tasks']) {
+  for (const name of ['messages', 'tasks', 'users']) {
     // upsert: create the doc if absent. $setOnInsert only applies on creation,
     // so restarting the app never resets an existing counter back to 0.
     await counters.updateOne({ _id: name }, { $setOnInsert: { seq: 0 } }, { upsert: true });
@@ -125,6 +147,7 @@ async function setState(key, value) {
 async function insertMessage(msg) {
   const doc = {
     id: await nextId('messages'),
+    user_id: msg.user_id,             // owner — required; see the tenancy note above
     source: msg.source || 'telegram', // 'telegram' | 'manual' (dashboard capture)
     // `??` supplies the fallback only for null/undefined — unlike `||`, it lets
     // legitimately falsy values such as 0 or "" through untouched.
@@ -171,7 +194,7 @@ async function setMessageStatus(id, status, error = null) {
 // ---------- tasks ----------
 
 /** Persist the tasks the extractor found in one message. */
-async function insertTasks(messageId, tasks) {
+async function insertTasks(userId, messageId, tasks) {
   const now = Date.now(); // one timestamp for the batch, so they sort together
   const docs = [];
 
@@ -180,6 +203,7 @@ async function insertTasks(messageId, tasks) {
   for (const t of tasks) {
     docs.push({
       id: await nextId('tasks'),
+      user_id: userId,       // owner — every read below filters on this
       message_id: messageId, // provenance: which message produced this task
       title: t.title,
       details: t.details ?? null,
@@ -205,18 +229,29 @@ async function insertTasks(messageId, tasks) {
   return docs;
 }
 
-function getTask(id) {
-  return db.collection('tasks').findOne({ id });
+function getTask(userId, id) {
+  // Both fields in the filter: looking up by id alone would let one account
+  // fetch (and then mutate) another account's task by guessing a number.
+  return db.collection('tasks').findOne({ id, user_id: userId });
 }
 
-function listTasksByStatus(status) {
+function listTasksByStatus(userId, status) {
   // Highest score first; id ascending breaks ties so the order is stable
   // between refreshes rather than jittering when scores are equal.
-  return db.collection('tasks').find({ status }).sort({ score: -1, id: 1 }).toArray();
+  return db.collection('tasks')
+    .find({ user_id: userId, status })
+    .sort({ score: -1, id: 1 })
+    .toArray();
 }
 
-function listAllTasks() {
-  return db.collection('tasks').find({}).sort({ score: -1, id: 1 }).toArray();
+function listAllTasks(userId) {
+  return db.collection('tasks').find({ user_id: userId }).sort({ score: -1, id: 1 }).toArray();
+}
+
+/** Every user's tasks in one status — for the periodic rescore, which is a
+ *  background job rather than a request and legitimately spans accounts. */
+function listTasksByStatusAllUsers(status) {
+  return db.collection('tasks').find({ status }).toArray();
 }
 
 /**
@@ -225,7 +260,7 @@ function listAllTasks() {
  * so without it a caller could PATCH arbitrary fields — rewriting `id`,
  * inventing new ones, or overwriting `message_id` to break provenance.
  */
-async function updateTaskFields(id, fields) {
+async function updateTaskFields(userId, id, fields) {
   const allowed = [
     'title', 'details', 'requester', 'category',
     'due_at', 'due_text', 'urgency', 'importance', 'effort_minutes',
@@ -240,8 +275,8 @@ async function updateTaskFields(id, fields) {
   // returnDocument: 'after' gives back the post-update doc, saving a re-read.
   const res = await db
     .collection('tasks')
-    .findOneAndUpdate({ id }, { $set }, { returnDocument: 'after' });
-  return res;
+    .findOneAndUpdate({ id, user_id: userId }, { $set }, { returnDocument: 'after' });
+  return res; // null when the task does not exist OR belongs to someone else
 }
 
 /** Score-only update — used by the periodic rescore, which touches many rows. */
@@ -249,27 +284,79 @@ async function updateTaskScore(id, score, now = Date.now()) {
   await db.collection('tasks').updateOne({ id }, { $set: { score, updated_at: now } });
 }
 
-async function deleteTask(id) {
-  const res = await db.collection('tasks').deleteOne({ id });
+async function deleteTask(userId, id) {
+  const res = await db.collection('tasks').deleteOne({ id, user_id: userId });
   return res.deletedCount > 0; // false = nothing matched, so the caller can 404
 }
 
 /** Counts per status, for the dashboard's stat tiles: [{status:'open', n:7}, …] */
-async function countByStatus() {
+async function countByStatus(userId) {
   const rows = await db
     .collection('tasks')
     // An aggregation pipeline: $group collapses documents by status and $sum:1
     // counts each one. Doing it in the database avoids shipping every task to
     // Node just to count them.
-    .aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }])
+    .aggregate([{ $match: { user_id: userId } }, { $group: { _id: '$status', n: { $sum: 1 } } }])
     .toArray();
   // Rename Mongo's _id (which holds the grouped value) to something readable.
   return rows.map((r) => ({ status: r._id, n: r.n }));
 }
 
+// ---------- users ----------
+
+/** Create an account. Throws on a duplicate email (unique index, code 11000). */
+async function createUser({ email, password_hash }) {
+  const doc = {
+    id: await nextId('users'),
+    email: email.toLowerCase().trim(),
+    password_hash,
+    tg_chat_id: null,      // set when they link Telegram
+    link_code: null,       // the one-time code used to do that
+    link_code_expires: null,
+    created_at: Date.now(),
+  };
+  await db.collection('users').insertOne(doc);
+  return doc;
+}
+
+const getUser = (id) => db.collection('users').findOne({ id });
+const getUserByEmail = (email) =>
+  db.collection('users').findOne({ email: String(email).toLowerCase().trim() });
+const getUserByChatId = (chatId) => db.collection('users').findOne({ tg_chat_id: chatId });
+const getUserByLinkCode = (code) =>
+  db.collection('users').findOne({ link_code: String(code).toUpperCase() });
+const countUsers = () => db.collection('users').countDocuments();
+
+async function updateUser(id, fields) {
+  const res = await db
+    .collection('users')
+    .findOneAndUpdate({ id }, { $set: fields }, { returnDocument: 'after' });
+  return res;
+}
+
+// ---------- sessions ----------
+
+const insertSession = (doc) => db.collection('sessions').insertOne(doc);
+const findSession = (tokenHash) => db.collection('sessions').findOne({ token_hash: tokenHash });
+const deleteSession = (tokenHash) => db.collection('sessions').deleteOne({ token_hash: tokenHash });
+/** Used by "sign out everywhere" and after a password change. */
+const deleteUserSessions = (userId) => db.collection('sessions').deleteMany({ user_id: userId });
+
 module.exports = {
   connect,
   close,
+  createUser,
+  getUser,
+  getUserByEmail,
+  getUserByChatId,
+  getUserByLinkCode,
+  countUsers,
+  updateUser,
+  insertSession,
+  findSession,
+  deleteSession,
+  deleteUserSessions,
+  listTasksByStatusAllUsers,
   getState,
   setState,
   insertMessage,

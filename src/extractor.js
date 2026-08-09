@@ -249,7 +249,7 @@ async function extractTasks(message) {
 async function processMessage(message) {
   try {
     const { tasks, note } = await extractTasks(message);
-    const saved = await dbModule.insertTasks(message.id, tasks);
+    const saved = await dbModule.insertTasks(message.user_id, message.id, tasks);
     // 'no_task' is distinct from 'processed' so you can audit what the
     // extractor decided to ignore.
     await dbModule.setMessageStatus(message.id, tasks.length > 0 ? 'processed' : 'no_task');

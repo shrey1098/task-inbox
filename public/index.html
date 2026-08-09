@@ -31,6 +31,12 @@
     <div class="nav-bar">
       <!-- Leading: theme. Trailing: compose. Both are icon buttons, as iOS
            prefers over labelled buttons in a nav bar. -->
+      <button class="nav-btn" id="account-btn" type="button" aria-label="Account">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c0-3.6 3.4-5.6 7.5-5.6s7.5 2 7.5 5.6"/>
+        </svg>
+      </button>
       <button class="nav-btn" id="theme" type="button" title="Theme" aria-label="Change theme"></button>
       <span class="nav-title">Inbox</span>
       <button class="nav-btn nav-spacer" id="compose-btn" type="button" aria-label="New task">
@@ -96,6 +102,27 @@
               placeholder="Paste a message — Claude works out the task, deadline and priority."></textarea>
     <button class="btn-primary" id="compose-submit" type="button">Add</button>
     <button class="btn-plain" id="compose-cancel" type="button">Cancel</button>
+  </div>
+
+  <!-- Account sheet: identity, Telegram linking, sign out. -->
+  <div class="sheet" id="account-sheet" role="dialog" aria-modal="true" aria-label="Account">
+    <div class="grabber" aria-hidden="true"></div>
+    <h2>Account</h2>
+    <div class="group">
+      <div class="line"><span class="k">Signed in as</span><span class="v" id="acct-email">—</span></div>
+      <div class="line"><span class="k">Telegram</span><span class="v" id="acct-tg">—</span></div>
+    </div>
+    <!-- Populated when the user asks for a link code. -->
+    <div id="link-area" hidden>
+      <div class="link-code" id="link-code">------</div>
+      <p class="link-hint">
+        Send <strong>/link CODE</strong> to your bot on Telegram. Expires in 15 minutes.
+      </p>
+    </div>
+    <button class="btn-primary" id="link-btn" type="button">Link Telegram</button>
+    <button class="btn-plain btn-danger" id="unlink-btn" type="button" hidden>Unlink Telegram</button>
+    <button class="btn-plain" id="logout-btn" type="button">Sign out</button>
+    <button class="btn-plain" id="account-cancel" type="button">Done</button>
   </div>
 
 </div>

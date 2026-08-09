@@ -103,25 +103,61 @@ function esc(s) {
 }
 
 /**
- * Access control. Bot usernames are discoverable, so without this anyone who
- * finds yours could fill your inbox and read your tasks.
+ * Which account owns this Telegram chat, if any.
  *
- * With TELEGRAM_ALLOWED_CHAT_IDS set, only those chats are served. Without it,
- * the first chat to message the bot is pinned as the owner and everyone else is
- * ignored — safe by default, no configuration needed.
+ * This is the multi-user access control: a chat reaches an account only by
+ * having been linked to it with a one-time code issued from a signed-in
+ * session. An unknown chat is told how to link and nothing else — it can
+ * neither read nor create tasks.
+ *
+ * TELEGRAM_ALLOWED_CHAT_IDS, when set, is an additional restriction on top.
  */
-async function isAllowed(chatId) {
-  if (config.telegram.allowedChatIds.length > 0) {
-    return config.telegram.allowedChatIds.includes(chatId);
+async function userForChat(chatId) {
+  if (config.telegram.allowedChatIds.length > 0
+      && !config.telegram.allowedChatIds.includes(chatId)) {
+    return null;
   }
-  const pinned = await dbModule.getState('pinned_chat_id');
-  if (pinned == null) {
-    await dbModule.setState('pinned_chat_id', chatId);
-    return true;
+  return dbModule.getUserByChatId(chatId);
+}
+
+/**
+ * Handle "/link ABC123": bind this chat to the account that generated the code.
+ * Codes are single-use and expire after 15 minutes.
+ */
+async function handleLink(chatId, arg) {
+  const code = String(arg || '').trim().toUpperCase();
+  if (!code) {
+    await send(chatId, 'Send <code>/link CODE</code> using the code from the app’s Account screen.');
+    return;
   }
-  // getState returns a string; chatId is a number. Number() aligns the types,
-  // because '12345' === 12345 is false.
-  return Number(pinned) === chatId;
+
+  const user = await dbModule.getUserByLinkCode(code);
+  if (!user || !user.link_code_expires || user.link_code_expires < Date.now()) {
+    // One message for "wrong code" and "expired code" — no hints for guessing.
+    await send(chatId, '❌ That code is not valid or has expired. Generate a new one in the app.');
+    log.warn(`bad link code from chat ${chatId}`);
+    return;
+  }
+
+  try {
+    // Clearing link_code is what makes the code single-use.
+    await dbModule.updateUser(user.id, {
+      tg_chat_id: chatId,
+      link_code: null,
+      link_code_expires: null,
+    });
+  } catch (err) {
+    // The unique index on tg_chat_id rejected it: this chat is already linked
+    // to a different account, which has to unlink first.
+    if (err.code === 11000) {
+      await send(chatId, '❌ This Telegram account is already linked to another user.');
+      return;
+    }
+    throw err;
+  }
+
+  log.info(`chat ${chatId} linked to account #${user.id} ${user.email}`);
+  await send(chatId, `✅ Linked to <b>${esc(user.email)}</b>. Forward me anything that needs doing.`);
 }
 
 /**
@@ -150,7 +186,7 @@ function describeOrigin(msg) {
 }
 
 /** Handle a /command. Anything else is treated as a message to file. */
-async function handleCommand(chatId, text) {
+async function handleCommand(chatId, user, text) {
   // Split on whitespace: "/snooze 7" → cmd "/snooze", arg "7".
   const [cmd, ...rest] = text.trim().split(/\s+/);
   const arg = rest.join(' ');
@@ -170,6 +206,8 @@ async function handleCommand(chatId, text) {
           '/done N — mark task N done',
           '/drop N — dismiss task N (not a real task)',
           '/snooze N — hide task N until tomorrow morning',
+          '/whoami — which account this chat is linked to',
+          '/unlink — disconnect this chat from your account',
         ].join('\n')
       );
       return;
@@ -177,7 +215,7 @@ async function handleCommand(chatId, text) {
     case '/tasks': {
       // Already sorted by score in the database; cap at 10 so the reply stays
       // glanceable on a phone.
-      const tasks = (await dbModule.listTasksByStatus('open')).slice(0, 10);
+      const tasks = (await dbModule.listTasksByStatus(user.id, 'open')).slice(0, 10);
       // `void` discards the value so this stays an expression — it lets us
       // "reply and return" on one line.
       if (tasks.length === 0) return void (await send(chatId, 'No open tasks. 🎉'));
@@ -191,7 +229,7 @@ async function handleCommand(chatId, text) {
     case '/today': {
       const cutoff = Date.now() + 24 * 3600 * 1000;
       // due_at <= cutoff also catches overdue tasks, since those are in the past.
-      const tasks = (await dbModule.listTasksByStatus('open')).filter(
+      const tasks = (await dbModule.listTasksByStatus(user.id, 'open')).filter(
         (t) => t.due_at != null && t.due_at <= cutoff
       );
       if (tasks.length === 0) return void (await send(chatId, 'Nothing due in the next 24h.'));
@@ -210,27 +248,38 @@ async function handleCommand(chatId, text) {
       const id = parseInt(arg, 10);
       // &lt; is an escaped "<" — the usage hint is inside an HTML message.
       if (!Number.isFinite(id)) return void (await send(chatId, `Usage: ${cmd} &lt;task id&gt;`));
-      const task = await dbModule.getTask(id);
+      // Scoped lookup: another account's task id simply does not exist here.
+      const task = await dbModule.getTask(user.id, id);
       if (!task) return void (await send(chatId, `No task #${id}.`));
 
       if (cmd === '/done') {
-        await dbModule.updateTaskFields(id, { status: 'done', completed_at: Date.now() });
+        await dbModule.updateTaskFields(user.id, id, { status: 'done', completed_at: Date.now() });
         await send(chatId, `✅ Done: ${esc(task.title)}`);
       } else if (cmd === '/drop') {
         // 'dropped' rather than deleted: the task stays for auditing what the
         // extractor got wrong.
-        await dbModule.updateTaskFields(id, { status: 'dropped' });
+        await dbModule.updateTaskFields(user.id, id, { status: 'dropped' });
         await send(chatId, `🗑 Dropped: ${esc(task.title)}`);
       } else {
         // Tomorrow at 08:00 local. setHours(8,0,0,0) zeroes minutes/seconds/ms.
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1); // rolls over months correctly
         tomorrow.setHours(8, 0, 0, 0);
-        await dbModule.updateTaskFields(id, { status: 'snoozed', snooze_until: tomorrow.getTime() });
+        await dbModule.updateTaskFields(user.id, id, { status: 'snoozed', snooze_until: tomorrow.getTime() });
         await send(chatId, `😴 Snoozed until tomorrow 8am: ${esc(task.title)}`);
       }
       return;
     }
+
+    case '/whoami':
+      await send(chatId, `Linked to <b>${esc(user.email)}</b>.`);
+      return;
+
+    case '/unlink':
+      await dbModule.updateUser(user.id, { tg_chat_id: null });
+      log.info(`chat ${chatId} unlinked from account #${user.id}`);
+      await send(chatId, 'Unlinked. Generate a new code in the app to reconnect.');
+      return;
 
     default:
       await send(chatId, 'Unknown command. /help for the list.');
@@ -240,21 +289,35 @@ async function handleCommand(chatId, text) {
 /** The main path: an inbound message becomes a stored message becomes task(s). */
 async function handleMessage(msg) {
   const chatId = msg.chat.id;
-  // Silent, not a rejection notice: replying would confirm the bot exists to
-  // someone probing it.
-  if (!(await isAllowed(chatId))) return;
+  const text = msg.text || msg.caption; // caption = text attached to a photo/document
 
-  // `caption` is the text attached to a photo or document.
-  const text = msg.text || msg.caption;
+  // /link is the one command an unlinked chat may use — it is how a chat
+  // becomes associated with an account in the first place.
+  if (text && /^\/link(@\S+)?(\s|$)/i.test(text.trim())) {
+    return handleLink(chatId, text.trim().split(/\s+/).slice(1).join(' '));
+  }
+
+  const user = await userForChat(chatId);
+  if (!user) {
+    // Explain how to link, but reveal nothing about any account.
+    await send(
+      chatId,
+      'This chat is not linked to an account yet.\n\nOpen the app, go to Account, tap ' +
+        '<b>Link Telegram</b>, and send me <code>/link YOURCODE</code>.'
+    );
+    return;
+  }
+
   if (!text) {
     await send(chatId, 'I can only read text right now — media without a caption is skipped.');
     return;
   }
 
-  if (text.startsWith('/')) return handleCommand(chatId, text);
+  if (text.startsWith('/')) return handleCommand(chatId, user, text);
 
   const origin = describeOrigin(msg);
   const stored = await dbModule.insertMessage({
+    user_id: user.id,
     tg_chat_id: chatId,
     tg_message_id: msg.message_id,
     text,
@@ -276,7 +339,8 @@ async function handleMessage(msg) {
   // Collapse whitespace and truncate so one log line stays one line.
   const preview = text.replace(/\s+/g, ' ').slice(0, 70);
   log.info(
-    `message #${stored.id} from ${origin.name || 'you'}: "${preview}${text.length > 70 ? '…' : ''}"`
+    `message #${stored.id} for #${user.id} from ${origin.name || 'them'}: ` +
+      `"${preview}${text.length > 70 ? '…' : ''}"`
   );
 
   // The API round trip — the slow step, a few seconds.

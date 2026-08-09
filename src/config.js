@@ -66,6 +66,16 @@ module.exports = {
   // 127.0.0.1 = loopback only, so it is reachable from this machine alone.
   host: process.env.HOST || '0.0.0.0',
 
+  // Set behind a reverse proxy or PaaS router, so Express reads the client's
+  // real protocol and IP from X-Forwarded-* instead of seeing the proxy's.
+  // Leave off when the app faces the network directly — otherwise a client
+  // could spoof those headers and defeat the login rate limiter.
+  trustProxy: process.env.TRUST_PROXY === 'true',
+
+  // Open registration. The safe posture for a small private instance is to
+  // leave it on, create the accounts you need, then set ALLOW_SIGNUP=false.
+  allowSignup: process.env.ALLOW_SIGNUP !== 'false',
+
   mongo: {
     // Where MongoDB lives. 127.0.0.1:27017 is the default for a local install
     // or the `docker run -p 27017:27017 mongo` container.
@@ -78,7 +88,9 @@ module.exports = {
     // From @BotFather. Empty string means "no bot" — index.js checks for this
     // and starts the dashboard without polling instead of crashing.
     token: process.env.TELEGRAM_BOT_TOKEN || '',
-    // Empty list = accept the first chat that talks to the bot and pin to it.
+    // Optional extra restriction: even a correctly linked chat is ignored
+    // unless it appears here. Usually left empty — accounts are the access
+    // control now, and a chat can only link using a code from a signed-in user.
     allowedChatIds,
     // How long Telegram holds an unanswered long-poll open before replying with
     // an empty list. Longer = fewer requests and lower latency; 30s is typical.

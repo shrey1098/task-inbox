@@ -1,6 +1,8 @@
 # Task Inbox
 
-Forward WhatsApp messages that need action to a Telegram bot → Claude extracts the task(s), estimates urgency/importance/effort and resolves deadlines → tasks land in MongoDB with a deterministic priority score → a web dashboard shows them as **Now / Soon / Later**.
+Forward WhatsApp messages that need action to a Telegram bot → Claude extracts the task(s), estimates urgency/importance/effort and resolves deadlines → tasks land in MongoDB with a deterministic priority score → an iOS-style web app shows them as **Now / Soon / Later**.
+
+Multi-user: each person signs in with their own account, links their own Telegram chat, and sees only their own tasks.
 
 ```
 WhatsApp ──(you forward)──▶ Telegram bot ──▶ Claude extractor ──▶ MongoDB ──▶ Dashboard
@@ -24,6 +26,39 @@ npm start
 ```
 
 Open http://localhost:3200 for the dashboard, then send your bot any message on Telegram. The first chat that messages the bot gets pinned as the only allowed user (or set `TELEGRAM_ALLOWED_CHAT_IDS` explicitly).
+
+## Accounts
+
+Everything is behind a login; the API returns 401 and page loads redirect when
+signed out.
+
+1. Open the app and choose **Create an account** (email + password, 10 chars minimum).
+2. Once you have created the accounts you need, set `ALLOW_SIGNUP=false` and
+   restart so nobody else can register.
+3. Each user opens **Account → Link Telegram**, gets a 6-character code, and
+   sends `/link CODE` to the bot. That code is single-use and expires in 15
+   minutes; it is what ties a Telegram chat to an account.
+
+One bot serves everyone — messages are routed to whichever account that chat is
+linked to. A chat that is not linked to any account is told how to link and can
+do nothing else.
+
+Passwords are hashed with scrypt and a per-user salt. Sessions are server-side,
+stored as SHA-256 hashes (so a database dump cannot be replayed as logins), and
+carried in an httpOnly, SameSite=Lax cookie. Failed logins are rate limited per
+account and per IP.
+
+### Upgrading from the single-user version
+
+Tasks created before accounts existed have no owner, so no account can see them.
+Create your account, then run:
+
+```sh
+npm run adopt -- you@example.com
+```
+
+That assigns every ownerless task and message to that account, and carries the
+previously pinned Telegram chat over to it. It is safe to run twice.
 
 ## Daily use
 

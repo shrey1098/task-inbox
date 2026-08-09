@@ -422,3 +422,61 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------------ auth screens */
+
+/* Centred single-column form, iOS-onboarding style. */
+.auth-page { display: grid; place-items: center; min-height: 100dvh; padding: 24px; }
+
+.auth {
+  width: 100%; max-width: 360px; text-align: center;
+}
+.auth-mark { font-size: 44px; line-height: 1; margin-bottom: 14px; }
+.auth h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.025em; }
+.auth-sub { margin: 6px 0 26px; color: var(--label-2); font-size: 15px; }
+
+.auth form { text-align: left; }
+.field-label {
+  display: block; font-size: 13px; color: var(--label-2);
+  margin: 0 0 6px 2px;
+}
+.auth input {
+  width: 100%; margin-bottom: 16px; padding: 13px 14px;
+  background: var(--bg-cell); color: var(--label);
+  border: .5px solid var(--separator); border-radius: var(--r-cell);
+  font: inherit; font-size: 16px; /* <16px makes iOS Safari zoom on focus */
+}
+.auth input:focus { outline: 2px solid var(--tint); outline-offset: -1px; border-color: transparent; }
+
+.auth-error {
+  margin: -6px 0 14px; padding: 10px 12px;
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red); border-radius: var(--r-cell); font-size: 13.5px;
+}
+
+/* -------------------------------------------------------- account sheet */
+
+/* A grouped list inside the sheet, matching the main list's cell styling. */
+.sheet .group {
+  background: var(--bg-cell-2); border-radius: var(--r-cell);
+  overflow: hidden; margin-bottom: 12px;
+}
+.sheet .group .line {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; font-size: 15px;
+}
+.sheet .group .line + .line { border-top: .5px solid var(--separator); }
+.sheet .group .line .k { color: var(--label-2); }
+.sheet .group .line .v { margin-left: auto; color: var(--label-2); }
+.sheet .group .line .v.ok { color: var(--green); }
+
+/* The Telegram link code: large, monospaced and selectable, because the whole
+   point is to retype or copy it into another app. */
+.link-code {
+  font: 600 26px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: .14em; text-align: center; padding: 14px;
+  background: var(--bg-cell-2); border-radius: var(--r-cell);
+  user-select: all; margin-bottom: 8px;
+}
+.link-hint { font-size: 13px; color: var(--label-2); text-align: center; margin: 0 0 12px; }
+.btn-danger { color: var(--red); }

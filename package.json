@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "server": "node src/index.js --no-bot",
-    "reprocess": "node src/reprocess.js"
+    "reprocess": "node src/reprocess.js",
+    "adopt": "node src/migrate.js",
+    "test": "node test/auth.test.js"
   },
   "license": "ISC",
   "dependencies": {

@@ -115,6 +115,12 @@ async function api(path, opts = {}) {
     headers: { 'content-type': 'application/json' },
     ...opts,
   });
+  // 401 means the session expired or was revoked. Reload rather than showing
+  // an error: the server will redirect to the login page.
+  if (res.status === 401) {
+    location.href = '/login.html';
+    throw new Error('signed out');
+  }
   if (!res.ok && res.status !== 204) {
     let detail = res.statusText;
     try { detail = (await res.json()).error || detail; } catch { /* not JSON */ }
@@ -353,9 +359,13 @@ function renderSegments() {
   for (const btn of $$('#seg button')) {
     const key = btn.dataset.filter;
     btn.classList.toggle('on', key === state.filter);
+    // .filter(Boolean) is load-bearing: replaceChildren(null) renders the
+    // literal string "null", exactly as append(null) does.
     btn.replaceChildren(
-      BUCKETS[key]?.name ?? 'All',
-      counts[key] ? el('span', { class: 'n' }, String(counts[key])) : null
+      ...[
+        BUCKETS[key]?.name ?? 'All',
+        counts[key] ? el('span', { class: 'n' }, String(counts[key])) : null,
+      ].filter(Boolean)
     );
   }
   moveThumb();
@@ -517,18 +527,85 @@ applyTheme(localStorage.getItem('theme') || 'system');
 
 /* ------------------------------------------------------------ compose sheet */
 
+/** Show or hide one sheet. The backdrop is shared by both. */
+function showSheet(id, on) {
+  $(id).classList.toggle('on', on);
+  // The backdrop stays up while EITHER sheet is open.
+  const anyOpen = $('#sheet').classList.contains('on') || $('#account-sheet').classList.contains('on');
+  $('#backdrop').classList.toggle('on', anyOpen);
+}
+
 function openSheet(on) {
-  $('#sheet').classList.toggle('on', on);
-  $('#backdrop').classList.toggle('on', on);
+  showSheet('#sheet', on);
   if (on) setTimeout(() => $('#compose-text').focus(), 250); // after the slide-up
   else $('#compose-text').value = '';
 }
 
+function closeAllSheets() {
+  openSheet(false);
+  showSheet('#account-sheet', false);
+}
+
 $('#compose-btn').addEventListener('click', () => openSheet(true));
 $('#compose-cancel').addEventListener('click', () => openSheet(false));
-$('#backdrop').addEventListener('click', () => openSheet(false));
-// Escape closes the sheet — expected on a desktop keyboard.
-addEventListener('keydown', (e) => { if (e.key === 'Escape') openSheet(false); });
+$('#backdrop').addEventListener('click', closeAllSheets);
+// Escape closes whatever is open — expected on a desktop keyboard.
+addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllSheets(); });
+
+/* ------------------------------------------------------------ account sheet */
+
+/** Load identity + Telegram status into the account sheet. */
+async function loadAccount() {
+  try {
+    const me = await api('/me');
+    $('#acct-email').textContent = me.email;
+    $('#acct-tg').textContent = me.tg_linked ? 'Linked' : 'Not linked';
+    $('#acct-tg').classList.toggle('ok', me.tg_linked);
+    // Linking and unlinking are mutually exclusive states.
+    $('#link-btn').hidden = me.tg_linked;
+    $('#unlink-btn').hidden = !me.tg_linked;
+    if (me.tg_linked) $('#link-area').hidden = true;
+  } catch {
+    // api() already redirects on 401; anything else is transient.
+  }
+}
+
+$('#account-btn').addEventListener('click', () => {
+  showSheet('#account-sheet', true);
+  loadAccount();
+});
+$('#account-cancel').addEventListener('click', () => showSheet('#account-sheet', false));
+
+$('#link-btn').addEventListener('click', async () => {
+  const btn = $('#link-btn');
+  btn.disabled = true;
+  try {
+    const { link_code } = await api('/me/link-code', { method: 'POST' });
+    $('#link-code').textContent = link_code;
+    $('#link-area').hidden = false;
+    btn.textContent = 'New code';
+  } catch (err) {
+    toast(`Couldn’t create a code: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#unlink-btn').addEventListener('click', async () => {
+  try {
+    await api('/me/unlink', { method: 'POST' });
+    loadAccount();
+    toast('Telegram unlinked.');
+  } catch (err) {
+    toast(`Couldn’t unlink: ${err.message}`);
+  }
+});
+
+$('#logout-btn').addEventListener('click', async () => {
+  // Not api(): a 401 here would bounce through the redirect path pointlessly.
+  await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/login.html';
+});
 
 $('#compose-submit').addEventListener('click', async () => {
   const input = $('#compose-text');

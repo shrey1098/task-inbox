@@ -1,0 +1,47 @@
+<!doctype html>
+<!--
+  login.html — sign in / create account.
+
+  A separate page rather than a modal inside the app: the server redirects here
+  when there is no valid session, so a signed-out visitor never loads the
+  dashboard shell at all.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Sign in — Inbox</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📥</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="auth-page">
+
+<main class="auth">
+  <div class="auth-mark" aria-hidden="true">📥</div>
+  <h1 id="auth-title">Welcome back</h1>
+  <p class="auth-sub" id="auth-sub">Sign in to your task inbox.</p>
+
+  <!-- novalidate: we show our own inline errors rather than the browser's
+       native bubbles, which cannot be styled and look out of place. -->
+  <form id="auth-form" novalidate>
+    <label class="field-label" for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" inputmode="email"
+           autocapitalize="none" spellcheck="false" required>
+
+    <label class="field-label" for="password">Password</label>
+    <!-- autocomplete tells a password manager whether to offer a saved
+         password or to generate a new one; app.js flips it with the mode. -->
+    <input id="password" type="password" autocomplete="current-password" required>
+
+    <p class="auth-error" id="auth-error" role="alert" hidden></p>
+
+    <button class="btn-primary" id="auth-submit" type="submit">Sign in</button>
+  </form>
+
+  <button class="btn-plain" id="auth-toggle" type="button">Create an account</button>
+</main>
+
+<script src="login.js"></script>
+</body>
+</html>

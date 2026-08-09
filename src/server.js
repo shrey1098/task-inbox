@@ -15,9 +15,13 @@ const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
 const { bucketOf, explainScore, rescoreOpenTasks, scoreTask } = require('./priority');
+const auth = require('./auth');
 const { createLogger, colorize, dim } = require('./log');
 
 const log = createLogger('http');
+
+/** Files a signed-out visitor may load. Anything else redirects to the login. */
+const PUBLIC_FILES = new Set(['/login.html', '/login.js', '/styles.css', '/favicon.ico']);
 
 /** Log one line per request: method, path, status, duration. */
 function requestLogger(req, res, next) {
@@ -52,19 +56,112 @@ function requestLogger(req, res, next) {
 function createApp() {
   const app = express();
 
+  // Behind a reverse proxy (Caddy, nginx, a PaaS router) this makes req.secure
+  // and req.ip reflect the ORIGINAL request rather than the proxy hop — which
+  // decides whether the session cookie gets the Secure flag, and which IP the
+  // login rate limiter counts against.
+  if (config.trustProxy) app.set('trust proxy', 1);
+
   // Middleware order matters: each runs in the order registered.
-  app.use(requestLogger);                                   // 1. time everything
-  app.use(express.json());                                  // 2. parse JSON bodies into req.body
-  app.use(express.static(path.join(config.rootDir, 'public'))); // 3. serve the dashboard
+  app.use(requestLogger);                    // 1. time everything
+  app.use(express.json({ limit: '256kb' })); // 2. parse JSON bodies (capped — nothing here is large)
+  app.use(auth.attachUser);                  // 3. set req.user from the session cookie
+
+  // 4. Gate the app shell BEFORE static files are served, so a signed-out
+  //    visitor gets the login page rather than a flash of empty dashboard.
+  app.use((req, res, next) => {
+    if (req.user) return next();
+    if (req.path.startsWith('/api/')) return next(); // the API answers 401 itself
+    if (PUBLIC_FILES.has(req.path)) return next();
+    return res.redirect('/login.html');
+  });
+
+  app.use(express.static(path.join(config.rootDir, 'public'))); // 5. serve the app
+
+  /* ------------------------------------------------------------ auth routes */
+
+  // Mark the cookie Secure only when the original request really was HTTPS: a
+  // Secure cookie is silently dropped over plain HTTP, which would make local
+  // development look like a broken login.
+  const isSecure = (req) => req.secure || req.headers['x-forwarded-proto'] === 'https';
+
+  app.post('/api/auth/signup', async (req, res) => {
+    if (!config.allowSignup) return res.status(403).json({ error: 'sign-ups are closed' });
+
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ error: 'enter a valid email address' });
+    }
+    // Length beats composition rules, which mostly produce predictable
+    // substitutions rather than stronger passwords.
+    if (password.length < 10) {
+      return res.status(400).json({ error: 'password must be at least 10 characters' });
+    }
+
+    try {
+      const user = await dbModule.createUser({
+        email,
+        password_hash: await auth.hashPassword(password),
+      });
+      const token = await auth.createSession(user.id, req.headers['user-agent']);
+      auth.setSessionCookie(res, token, isSecure(req));
+      log.info(`new account #${user.id} ${email}`);
+      res.status(201).json({ email: user.email, tg_linked: false });
+    } catch (err) {
+      if (err.code === 11000) { // unique index on email
+        return res.status(409).json({ error: 'that email is already registered' });
+      }
+      throw err;
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    const ip = req.ip || 'unknown';
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+
+    // Limited per IP+email, so one account's failures never lock out another
+    // person on the same network. See the note in auth.js.
+    if (auth.tooManyAttempts(ip, email)) {
+      return res.status(429).json({ error: 'too many attempts — wait 15 minutes' });
+    }
+    const user = await dbModule.getUserByEmail(email);
+
+    // The same message for "no such account" and "wrong password": telling them
+    // apart would let someone enumerate which emails are registered.
+    const ok = user ? await auth.verifyPassword(password, user.password_hash) : false;
+    if (!ok) {
+      auth.noteFailure(ip, email);
+      log.warn(`failed login for ${email || '(blank)'} from ${ip}`);
+      return res.status(401).json({ error: 'wrong email or password' });
+    }
+
+    auth.clearAttempts(ip, email);
+    const token = await auth.createSession(user.id, req.headers['user-agent']);
+    auth.setSessionCookie(res, token, isSecure(req));
+    log.info(`signed in #${user.id} ${user.email}`);
+    res.json({ email: user.email, tg_linked: user.tg_chat_id != null });
+  });
+
+  app.post('/api/auth/logout', async (req, res) => {
+    await auth.destroySession(req.sessionToken);
+    auth.clearSessionCookie(res);
+    res.status(204).end();
+  });
+
+  /* --------------------------------------------------------- the task API */
 
   // A Router groups the API endpoints so they can be mounted under /api below.
   const api = express.Router();
+  api.use(auth.requireAuth); // every route below needs a signed-in user
 
   // GET /api/tasks?status=open — the dashboard's main read.
   api.get('/tasks', async (req, res) => {
     const status = req.query.status || 'open';
+    const uid = req.user.id; // the tenant filter — see the note at the top of db.js
     const tasks =
-      status === 'all' ? await dbModule.listAllTasks() : await dbModule.listTasksByStatus(status);
+      status === 'all' ? await dbModule.listAllTasks(uid) : await dbModule.listTasksByStatus(uid, status);
 
     // One timestamp for the whole batch, so every task is judged against the
     // same "now" and the list can't be internally inconsistent.
@@ -83,14 +180,50 @@ function createApp() {
   });
 
   // GET /api/stats — counts per status, for the stat tiles.
-  api.get('/stats', async (_req, res) => { // _req: unused, underscore marks it so
-    res.json({ counts: await dbModule.countByStatus() });
+  api.get('/stats', async (req, res) => {
+    res.json({ counts: await dbModule.countByStatus(req.user.id) });
+  });
+
+  /** Who am I — drives the account sheet and the Telegram link status. */
+  api.get('/me', async (req, res) => {
+    res.json({
+      email: req.user.email,
+      tg_linked: req.user.tg_chat_id != null,
+      link_code: req.user.link_code,
+    });
+  });
+
+  /**
+   * Issue a one-time code the user sends to the bot as "/link ABC123", which is
+   * what ties a Telegram chat to this account. It replaces the old "whoever
+   * messages the bot first owns it" rule, which cannot work with more than one
+   * user.
+   */
+  api.post('/me/link-code', async (req, res) => {
+    // No I/O/0/1 in the alphabet, so a code can be read aloud or retyped
+    // without ambiguity.
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    const bytes = require('crypto').randomBytes(6);
+    const code = [...bytes].map((b) => alphabet[b % alphabet.length]).join('');
+
+    await dbModule.updateUser(req.user.id, {
+      link_code: code,
+      link_code_expires: Date.now() + 15 * 60e3, // short-lived on purpose
+    });
+    res.json({ link_code: code, expires_in_minutes: 15 });
+  });
+
+  api.post('/me/unlink', async (req, res) => {
+    await dbModule.updateUser(req.user.id, { tg_chat_id: null, link_code: null });
+    res.status(204).end();
   });
 
   // PATCH /api/tasks/:id — the done / snooze / drop buttons.
   api.patch('/tasks/:id', async (req, res) => {
     const id = Number(req.params.id); // URL params are strings
-    const task = await dbModule.getTask(id);
+    // Scoped read: another account's task id 404s here instead of being
+    // updated, so task ids never need to be unguessable.
+    const task = await dbModule.getTask(req.user.id, id);
     if (!task) return res.status(404).json({ error: 'not found' });
 
     const fields = { ...req.body }; // copy so we don't mutate the request body
@@ -102,17 +235,17 @@ function createApp() {
 
     // db.updateTaskFields ignores any field not on its allowlist, so a
     // malicious PATCH cannot rewrite `id` or `message_id`.
-    let updated = await dbModule.updateTaskFields(id, fields);
+    let updated = await dbModule.updateTaskFields(req.user.id, id, fields);
     // A manual edit may have changed urgency/importance/due date, so the score
     // has to be recomputed from the post-update document.
-    updated = await dbModule.updateTaskFields(id, { score: scoreTask(updated) });
+    updated = await dbModule.updateTaskFields(req.user.id, id, { score: scoreTask(updated) });
 
     res.json(withoutMongoId(updated));
   });
 
   // DELETE /api/tasks/:id — permanent removal (the UI prefers 'dropped').
   api.delete('/tasks/:id', async (req, res) => {
-    const ok = await dbModule.deleteTask(Number(req.params.id));
+    const ok = await dbModule.deleteTask(req.user.id, Number(req.params.id));
     // 204 = success, no body. .end() sends the response with no content.
     res.status(ok ? 204 : 404).end();
   });
@@ -124,6 +257,7 @@ function createApp() {
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const stored = await dbModule.insertMessage({
+      user_id: req.user.id,
       source: 'manual',
       text,
       origin_name: req.body.origin_name || null,
