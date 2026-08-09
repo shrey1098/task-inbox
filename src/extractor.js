@@ -7,12 +7,17 @@ const { scoreTask } = require('./priority');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
+/**
+ * Structured-output schema. Optional values use empty string / 0 rather than
+ * null unions, which keeps the schema inside the documented supported subset.
+ * normalise() turns the sentinels back into nulls.
+ */
 const OUTPUT_SCHEMA = {
   type: 'object',
   properties: {
     tasks: {
       type: 'array',
-      description: 'Actionable tasks found in the message. Empty if none.',
+      description: 'Actionable tasks found in the message. Empty array if there are none.',
       items: {
         type: 'object',
         properties: {
@@ -21,38 +26,42 @@ const OUTPUT_SCHEMA = {
             description: 'Short imperative task title, e.g. "Send Q3 invoice to Rahul".',
           },
           details: {
-            type: ['string', 'null'],
-            description: 'Extra context from the message worth keeping. Null if the title says it all.',
+            type: 'string',
+            description: 'Extra context worth keeping. Empty string if the title says it all.',
           },
           requester: {
-            type: ['string', 'null'],
-            description: 'Who is asking for this, if identifiable from the message or its forward header.',
+            type: 'string',
+            description:
+              'Who is asking for this, if identifiable from the message or its forward header. Empty string if unknown.',
           },
           category: {
             type: 'string',
             enum: ['work', 'personal', 'finance', 'errand', 'social', 'health', 'other'],
           },
           due_text: {
-            type: ['string', 'null'],
-            description: 'The deadline exactly as phrased in the message, e.g. "by Friday", "tonight". Null if none.',
+            type: 'string',
+            description:
+              'The deadline as phrased in the message, e.g. "by Friday", "tonight". Empty string if none.',
           },
           due_at_iso: {
-            type: ['string', 'null'],
-            description: 'The deadline resolved to an ISO 8601 datetime using the provided current time and timezone. Null if no deadline. Prefer end of business (18:00) for date-only deadlines.',
+            type: 'string',
+            description:
+              'The deadline resolved to an ISO 8601 datetime using the current time and timezone given. Empty string if there is no deadline. Use 18:00 local for date-only deadlines.',
           },
           urgency: {
             type: 'integer',
             enum: [1, 2, 3, 4, 5],
-            description: 'How time-pressed this is: 1 = whenever, 3 = this week, 5 = drop everything.',
+            description: 'Time pressure: 1 = whenever, 3 = this week, 5 = drop everything.',
           },
           importance: {
             type: 'integer',
             enum: [1, 2, 3, 4, 5],
-            description: 'How much it matters if this slips: 1 = trivial, 5 = serious consequences.',
+            description: 'Cost of slipping: 1 = trivial, 5 = serious consequences.',
           },
           effort_minutes: {
-            type: ['integer', 'null'],
-            description: 'Rough estimate of minutes to complete. Null if unguessable.',
+            type: 'integer',
+            enum: [0, 5, 15, 30, 60, 120, 240, 480],
+            description: 'Rough minutes to complete. 0 when it cannot be guessed.',
           },
         },
         required: [
@@ -70,8 +79,9 @@ const OUTPUT_SCHEMA = {
       },
     },
     note: {
-      type: ['string', 'null'],
-      description: 'One short sentence on why no task was extracted, when tasks is empty. Null otherwise.',
+      type: 'string',
+      description:
+        'One short sentence on why nothing was extracted, when tasks is empty. Empty string otherwise.',
     },
   },
   required: ['tasks', 'note'],
@@ -80,18 +90,34 @@ const OUTPUT_SCHEMA = {
 
 const SYSTEM_PROMPT = `You extract actionable tasks from messages a user forwards from WhatsApp into their personal task inbox.
 
-The user forwards a message when they believe it needs action from them, so lean towards extracting a task — but not every forward contains one: pure FYIs, greetings, or already-completed things yield an empty task list.
+The user forwards a message when they believe it needs action from them, so lean towards extracting a task — but not every forward contains one: pure FYIs, status updates, greetings, or already-completed things yield an empty task list.
 
 Rules:
 - Tasks are things the USER must do, phrased as imperatives from their point of view ("Pay the electricity bill", not "User should pay").
 - One message can contain several tasks; extract each separately.
-- The message may include a forward header like "Forwarded from Mom" — that names the requester.
-- Resolve relative deadlines ("tomorrow", "by Friday", "tonight") against the current time and timezone given in the message. If only a date is implied, use 18:00 local.
-- Be honest with urgency/importance; most things are 2-3. Reserve 5s for genuine emergencies or hard external deadlines.`;
+- The message may include a forward header naming who it came from — that is usually the requester.
+- Resolve relative deadlines ("tomorrow", "by Friday", "tonight") against the current time and timezone given. If only a date is implied, use 18:00 local.
+- Be honest with urgency and importance; most things are 2-3. Reserve 5 for genuine emergencies or hard external deadlines.`;
+
+function emptyToNull(s) {
+  const trimmed = (s ?? '').trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/** Older SDK builds lack messages.parse; fall back to create + JSON.parse. */
+async function callModel(params) {
+  if (typeof client.messages.parse === 'function') {
+    const response = await client.messages.parse(params);
+    return { response, parsed: response.parsed_output };
+  }
+  const response = await client.messages.create(params);
+  const text = response.content.find((b) => b.type === 'text')?.text ?? '';
+  return { response, parsed: text ? JSON.parse(text) : null };
+}
 
 /**
- * Run one message through Claude and return an array of task field objects
- * (not yet persisted). Throws on API errors so callers can mark the message failed.
+ * Run one message through Claude and return task field objects (not yet persisted).
+ * Throws on API errors so callers can mark the message failed and retry later.
  */
 async function extractTasks(message) {
   const sentAt = message.sent_at ? new Date(message.sent_at).toISOString() : null;
@@ -103,15 +129,13 @@ async function extractTasks(message) {
     sentAt ? `Originally sent: ${sentAt}` : null,
   ].filter(Boolean);
 
-  const response = await client.messages.parse({
+  const { response, parsed } = await callModel({
     model: config.anthropic.model,
-    max_tokens: 2048,
+    // Thinking shares this budget with the response, so leave headroom.
+    max_tokens: 8192,
     output_config: {
       effort: config.anthropic.effort,
-      format: {
-        type: 'json_schema',
-        schema: OUTPUT_SCHEMA,
-      },
+      format: { type: 'json_schema', schema: OUTPUT_SCHEMA },
     },
     system: SYSTEM_PROMPT,
     messages: [
@@ -122,25 +146,28 @@ async function extractTasks(message) {
     ],
   });
 
-  if (response.stop_reason === 'refusal' || !response.parsed_output) {
-    throw new Error(`extractor got no parseable output (stop_reason: ${response.stop_reason})`);
+  if (response.stop_reason === 'refusal') {
+    throw new Error('model declined to process this message');
+  }
+  if (!parsed) {
+    throw new Error(`no parseable output (stop_reason: ${response.stop_reason})`);
   }
 
-  const { tasks, note } = response.parsed_output;
   return {
-    note,
-    tasks: tasks.map((t) => {
-      const due_at = t.due_at_iso ? Date.parse(t.due_at_iso) || null : null;
+    note: emptyToNull(parsed.note),
+    tasks: (parsed.tasks ?? []).map((t) => {
+      const iso = emptyToNull(t.due_at_iso);
+      const parsedDue = iso ? Date.parse(iso) : NaN;
       const fields = {
         title: t.title,
-        details: t.details,
-        requester: t.requester,
+        details: emptyToNull(t.details),
+        requester: emptyToNull(t.requester),
         category: t.category,
-        due_at,
-        due_text: t.due_text,
+        due_at: Number.isNaN(parsedDue) ? null : parsedDue,
+        due_text: emptyToNull(t.due_text),
         urgency: t.urgency,
         importance: t.importance,
-        effort_minutes: t.effort_minutes,
+        effort_minutes: t.effort_minutes > 0 ? t.effort_minutes : null,
         extractor: config.anthropic.model,
       };
       fields.score = scoreTask(fields);
