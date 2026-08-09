@@ -3,231 +3,78 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Task Inbox</title>
-<style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --panel2: #1d2129; --text: #e8eaed;
-    --muted: #9aa0a6; --line: #2a2f3a; --accent: #4f8cff;
-    --now: #ff5f56; --soon: #ffbd2e; --later: #27c93f;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-    padding: 20px 24px 8px;
-  }
-  header h1 { margin: 0; font-size: 20px; }
-  header .stats { color: var(--muted); font-size: 13px; }
-  main { padding: 8px 24px 48px; max-width: 1200px; margin: 0 auto; }
-
-  .capture { display: flex; gap: 8px; margin: 12px 0 20px; }
-  .capture input {
-    flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text);
-    border-radius: 8px; padding: 10px 12px; font-size: 14px;
-  }
-  .capture button {
-    background: var(--accent); border: 0; color: #fff; border-radius: 8px;
-    padding: 10px 16px; cursor: pointer; font-size: 14px;
-  }
-  .capture button:disabled { opacity: .5; cursor: wait; }
-
-  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-  .col h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
-    color: var(--muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px;
-  }
-  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-  .dot.now { background: var(--now); } .dot.soon { background: var(--soon); } .dot.later { background: var(--later); }
-
-  .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 10px;
-  }
-  .card.overdue { border-color: var(--now); }
-  .card .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-  .card .title { font-weight: 600; }
-  .card .score { color: var(--muted); font-size: 12px; white-space: nowrap; }
-  .card .meta { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
-  .card .details { color: var(--muted); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
-  .card .who { color: var(--accent); }
-  .badge {
-    display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px;
-    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); margin-right: 6px;
-  }
-  .badge.overdue { color: var(--now); border-color: var(--now); }
-  .actions { margin-top: 10px; display: flex; gap: 6px; }
-  .actions button {
-    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 6px; padding: 4px 10px; font-size: 12.5px; cursor: pointer;
-  }
-  .actions button:hover { border-color: var(--accent); }
-
-  .empty { color: var(--muted); font-size: 13.5px; padding: 8px 2px; }
-  .donebar { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 14px; }
-  .donebar summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
-  .done-item { color: var(--muted); font-size: 13.5px; padding: 4px 2px; text-decoration: line-through; }
-  #error {
-    display: none; background: #3a1d1d; border: 1px solid var(--now); color: #ffb4ae;
-    padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13.5px;
-  }
-</style>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📥</text></svg>">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
 <header>
-  <h1>📥 Task Inbox</h1>
-  <span class="stats" id="stats"></span>
+  <span class="mark" aria-hidden="true">↓</span>
+  <div class="brand">
+    <h1>Task Inbox</h1>
+    <span class="sub">forwarded → prioritised</span>
+  </div>
+  <span class="pulse" id="pulse" aria-hidden="true"></span>
+  <span class="sub" id="synced">connecting…</span>
+  <button class="ghost" id="theme" type="button">Auto</button>
 </header>
-<main>
-  <div id="error"></div>
-  <form class="capture" id="captureForm">
-    <input id="captureText" placeholder="Type or paste a message to file a task without Telegram…" autocomplete="off">
-    <button id="captureBtn" type="submit">Add</button>
+
+<main class="wrap">
+  <section class="stats" id="stats" aria-label="Summary">
+    <div class="skeleton" style="height:104px"></div>
+    <div class="skeleton" style="height:104px"></div>
+    <div class="skeleton" style="height:104px"></div>
+    <div class="skeleton" style="height:104px"></div>
+  </section>
+
+  <form class="capture" id="capture">
+    <div class="field">
+      <span class="icon" aria-hidden="true">✎</span>
+      <input id="capture-text" autocomplete="off" spellcheck="false"
+             placeholder="Paste a message and let Claude pull the task out…"
+             aria-label="Capture a message">
+      <span class="kbd" aria-hidden="true">/</span>
+    </div>
+    <button id="capture-btn" type="submit">Add</button>
   </form>
 
   <div class="columns">
-    <section class="col" id="col-now"><h2><span class="dot now"></span>Now</h2><div class="list"></div></section>
-    <section class="col" id="col-soon"><h2><span class="dot soon"></span>Soon</h2><div class="list"></div></section>
-    <section class="col" id="col-later"><h2><span class="dot later"></span>Later</h2><div class="list"></div></section>
+    <section class="col" id="col-now" data-bucket="now">
+      <div class="col-head">
+        <span class="bar" aria-hidden="true"></span>
+        <span class="name">Now</span>
+        <span class="hint"></span>
+      </div>
+      <div class="list"><div class="skeleton"></div><div class="skeleton"></div></div>
+    </section>
+
+    <section class="col" id="col-soon" data-bucket="soon">
+      <div class="col-head">
+        <span class="bar" aria-hidden="true"></span>
+        <span class="name">Soon</span>
+        <span class="hint"></span>
+      </div>
+      <div class="list"><div class="skeleton"></div></div>
+    </section>
+
+    <section class="col" id="col-later" data-bucket="later">
+      <div class="col-head">
+        <span class="bar" aria-hidden="true"></span>
+        <span class="name">Later</span>
+        <span class="hint"></span>
+      </div>
+      <div class="list"><div class="skeleton"></div></div>
+    </section>
   </div>
 
-  <details class="donebar" id="donebar">
-    <summary>Recently completed</summary>
-    <div class="list"></div>
+  <details class="done-panel">
+    <summary>Completed<span id="done-count"></span></summary>
+    <div id="done-list"></div>
   </details>
 </main>
 
-<script>
-const $ = (sel, root = document) => root.querySelector(sel);
-
-function el(tag, attrs = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') node.className = v;
-    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v);
-  }
-  for (const child of [].concat(children)) {
-    node.append(child instanceof Node ? child : document.createTextNode(child));
-  }
-  return node;
-}
-
-function showError(msg) {
-  const box = $('#error');
-  box.textContent = msg;
-  box.style.display = msg ? 'block' : 'none';
-}
-
-async function api(path, opts = {}) {
-  const res = await fetch('/api' + path, {
-    headers: { 'content-type': 'application/json' },
-    ...opts,
-  });
-  if (!res.ok && res.status !== 204) {
-    let detail = res.statusText;
-    try { detail = (await res.json()).error || detail; } catch {}
-    throw new Error(detail);
-  }
-  return res.status === 204 ? null : res.json();
-}
-
-function dueLabel(t) {
-  if (!t.due_at) return t.due_text || null;
-  const d = new Date(t.due_at);
-  const nice = d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  return t.due_text ? `${t.due_text} (${nice})` : nice;
-}
-
-function taskCard(t) {
-  const badges = [];
-  if (t.overdue) badges.push(el('span', { class: 'badge overdue' }, 'overdue'));
-  if (t.category) badges.push(el('span', { class: 'badge' }, t.category));
-  const due = dueLabel(t);
-  if (due) badges.push(el('span', { class: 'badge' }, '⏰ ' + due));
-
-  const meta = el('div', { class: 'meta' }, badges);
-  if (t.requester) meta.append(' from ', el('span', { class: 'who' }, t.requester));
-
-  const act = (label, fields) =>
-    el('button', {
-      onclick: async () => {
-        try { await api(`/tasks/${t.id}`, { method: 'PATCH', body: JSON.stringify(fields) }); refresh(); }
-        catch (err) { showError(`Update failed: ${err.message}`); }
-      },
-    }, label);
-
-  const tomorrow8 = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.getTime(); };
-
-  return el('div', { class: 'card' + (t.overdue ? ' overdue' : '') }, [
-    el('div', { class: 'top' }, [
-      el('span', { class: 'title' }, `#${t.id} ${t.title}`),
-      el('span', { class: 'score', title: t.explanation }, String(Math.round(t.score))),
-    ]),
-    meta,
-    ...(t.details ? [el('div', { class: 'details' }, t.details)] : []),
-    el('div', { class: 'actions' }, [
-      act('✓ Done', { status: 'done' }),
-      act('😴 Tomorrow', { status: 'snoozed', snooze_until: tomorrow8() }),
-      act('🗑 Drop', { status: 'dropped' }),
-    ]),
-  ]);
-}
-
-async function refresh() {
-  try {
-    const [open, done, stats] = await Promise.all([
-      api('/tasks?status=open'),
-      api('/tasks?status=done'),
-      api('/stats'),
-    ]);
-    showError('');
-
-    const buckets = { now: [], soon: [], later: [] };
-    for (const t of open) buckets[t.bucket]?.push(t);
-
-    for (const name of ['now', 'soon', 'later']) {
-      const list = $(`#col-${name} .list`);
-      list.replaceChildren();
-      if (buckets[name].length === 0) list.append(el('div', { class: 'empty' }, '—'));
-      for (const t of buckets[name]) list.append(taskCard(t));
-    }
-
-    const doneList = $('#donebar .list');
-    doneList.replaceChildren();
-    for (const t of done.slice(0, 15)) {
-      doneList.append(el('div', { class: 'done-item' }, `#${t.id} ${t.title}`));
-    }
-
-    const parts = stats.counts.map((c) => `${c.n} ${c.status}`);
-    $('#stats').textContent = parts.join(' · ');
-  } catch (err) {
-    showError(`Could not load tasks: ${err.message}`);
-  }
-}
-
-$('#captureForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const input = $('#captureText');
-  const btn = $('#captureBtn');
-  const text = input.value.trim();
-  if (!text) return;
-  btn.disabled = true;
-  try {
-    await api('/messages', { method: 'POST', body: JSON.stringify({ text }) });
-    input.value = '';
-    refresh();
-  } catch (err) {
-    showError(`Capture failed: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-refresh();
-setInterval(refresh, 15000);
-</script>
+<script src="app.js"></script>
 </body>
 </html>
