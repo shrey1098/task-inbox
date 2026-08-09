@@ -47,3 +47,14 @@ Because scoring is local, ranks stay explainable, deadlines "heat up" without ex
 - Messages that fail extraction (API outage etc.) are kept with `status: failed` and retried on boot, or manually via `npm run reprocess`.
 - `npm run server` starts the dashboard/API without the Telegram bot.
 - Everything the bot receives is stored in the `messages` collection, so the extractor can be re-run when you tweak the prompt.
+
+## Troubleshooting
+
+**`fetch failed` / `ETIMEDOUT` reaching Telegram, but `curl` to the same URL works**
+(common on WSL2) — Node races IPv4 and IPv6 with a 250 ms per-attempt deadline, and a
+blackholed IPv6 route makes every attempt expire. `src/bootstrap-net.js` pins connections
+to IPv4 to avoid this. Set `NET_AUTOSELECT_FAMILY=1` to restore Node's default behaviour.
+
+**Bot stops but the dashboard keeps running** — that is deliberate. Transient network
+errors retry with backoff; only an unrecoverable error (usually a bad
+`TELEGRAM_BOT_TOKEN`) ends the poll loop, and it logs the reason.

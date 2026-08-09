@@ -2,6 +2,8 @@
 
 // Re-run the extractor over failed/pending messages: `npm run reprocess`
 
+require('./bootstrap-net');
+
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
 

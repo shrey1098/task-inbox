@@ -7,15 +7,45 @@ const { explainScore } = require('./priority');
 
 const API = `https://api.telegram.org/bot${config.telegram.token}`;
 
-async function tg(method, params = {}) {
-  const res = await fetch(`${API}/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(params),
-  });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function tg(method, params = {}, timeoutMs = 20000) {
+  let res;
+  try {
+    res = await fetch(`${API}/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    // fetch collapses network problems into "fetch failed"; surface the real cause.
+    throw new Error(`Telegram ${method}: ${err.cause?.code || err.name || err.message}`);
+  }
   const body = await res.json();
-  if (!body.ok) throw new Error(`Telegram ${method}: ${body.description}`);
+  if (!body.ok) throw new Error(`Telegram ${method}: ${res.status} ${body.description}`);
   return body.result;
+}
+
+/** A bad token is permanent; anything else is worth retrying. */
+function isFatal(err) {
+  return /\b401\b|unauthorized|\b404\b/i.test(err.message);
+}
+
+async function withRetry(label, fn) {
+  let delay = 2000;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (isFatal(err)) throw err;
+      console.error(
+        `[telegram] ${label} failed (attempt ${attempt}): ${err.message} — retrying in ${delay / 1000}s`
+      );
+      await sleep(delay);
+      delay = Math.min(delay * 2, 60000);
+    }
+  }
 }
 
 function send(chatId, text) {
@@ -183,22 +213,25 @@ async function runBot() {
     return;
   }
 
-  const me = await tg('getMe');
+  const me = await withRetry('getMe', () => tg('getMe'));
   console.log(`[telegram] polling as @${me.username}`);
 
   let offset = parseInt((await dbModule.getState('tg_offset')) ?? '0', 10);
+  const pollSeconds = config.telegram.pollTimeoutSeconds;
 
   for (;;) {
     let updates;
     try {
-      updates = await tg('getUpdates', {
-        offset,
-        timeout: config.telegram.pollTimeoutSeconds,
-        allowed_updates: ['message'],
-      });
+      updates = await tg(
+        'getUpdates',
+        { offset, timeout: pollSeconds, allowed_updates: ['message'] },
+        // Telegram holds a long poll open for `pollSeconds`; allow for that plus slack.
+        (pollSeconds + 15) * 1000
+      );
     } catch (err) {
+      if (isFatal(err)) throw err;
       console.error('[telegram] poll error:', err.message);
-      await new Promise((r) => setTimeout(r, 5000));
+      await sleep(5000);
       continue;
     }
 
