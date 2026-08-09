@@ -25,6 +25,9 @@ const allowedChatIds = (process.env.TELEGRAM_ALLOWED_CHAT_IDS || '')
 module.exports = {
   rootDir,
   port: int(process.env.PORT, 3200),
+  // 0.0.0.0 makes the dashboard reachable from other devices on your network
+  // (phone, tablet). Set HOST=127.0.0.1 to keep it on this machine only.
+  host: process.env.HOST || '0.0.0.0',
   mongo: {
     uri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017',
     dbName: process.env.MONGODB_DB || 'task_inbox',
@@ -43,6 +46,6 @@ module.exports = {
     effort: process.env.ANTHROPIC_EFFORT || 'low',
   },
 
-  // Local timezone offset in minutes, used when resolving "tomorrow"/"Friday".
+  // IANA timezone used when resolving "tomorrow" / "by Friday".
   timezone: process.env.TIMEZONE || 'UTC',
 };

@@ -4,6 +4,9 @@ const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const dbModule = require('./db');
 const { scoreTask } = require('./priority');
+const { createLogger } = require('./log');
+
+const log = createLogger('extract');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -187,7 +190,7 @@ async function processMessage(message) {
     await dbModule.setMessageStatus(message.id, tasks.length > 0 ? 'processed' : 'no_task');
     return { tasks: saved, note };
   } catch (err) {
-    console.error(`[extractor] message ${message.id} failed:`, err.message);
+    log.error(`message #${message.id} failed:`, err.message);
     await dbModule.setMessageStatus(message.id, 'failed', err.message);
     return { tasks: [], note: null, error: err.message };
   }

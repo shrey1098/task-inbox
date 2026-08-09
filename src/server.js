@@ -1,14 +1,39 @@
 'use strict';
 
 const path = require('path');
+const os = require('os');
 const express = require('express');
 const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
 const { bucketOf, explainScore, rescoreOpenTasks, scoreTask } = require('./priority');
+const { createLogger, colorize, dim } = require('./log');
+
+const log = createLogger('http');
+
+/** One line per request: method, path, status, duration. */
+function requestLogger(req, res, next) {
+  const started = process.hrtime.bigint();
+  // Capture up front: Express rewrites req.url when dispatching into a mounted
+  // router, so by the time 'finish' fires req.path is router-relative.
+  const { method, originalUrl } = req;
+
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    const code = res.statusCode;
+    const tint = code >= 500 ? '1;31' : code >= 400 ? '1;33' : code >= 300 ? '36' : '32';
+    // Static-asset traffic is noise at info level; keep it for debug.
+    const level = originalUrl.startsWith('/api') || code >= 400 ? 'info' : 'debug';
+    log[level](
+      `${method.padEnd(6)} ${originalUrl} ${colorize(tint, code)} ${dim(`${ms.toFixed(0)}ms`)}`
+    );
+  });
+  next();
+}
 
 function createApp() {
   const app = express();
+  app.use(requestLogger);
   app.use(express.json());
   app.use(express.static(path.join(config.rootDir, 'public')));
 
@@ -81,18 +106,34 @@ function withoutMongoId(doc) {
   return rest;
 }
 
+/** Every non-loopback IPv4 address, so we can print URLs that work from a phone. */
+function lanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((i) => i && i.family === 'IPv4' && !i.internal)
+    .map((i) => i.address);
+}
+
 async function startServer() {
   const app = createApp();
 
   // Deadlines march on even when nothing changes in the DB.
   setInterval(() => {
-    rescoreOpenTasks(dbModule).catch((err) => console.error('[rescore]', err.message));
+    rescoreOpenTasks(dbModule)
+      .then((n) => n && log.debug(`rescored ${n} task(s)`))
+      .catch((err) => log.error('rescore failed:', err.message));
   }, 5 * 60 * 1000).unref();
   await rescoreOpenTasks(dbModule);
 
   return new Promise((resolve) => {
-    const server = app.listen(config.port, () => {
-      console.log(`[server] dashboard on http://localhost:${config.port}`);
+    const server = app.listen(config.port, config.host, () => {
+      log.info(`listening on ${config.host}:${config.port}`);
+      log.info(`  local    http://localhost:${config.port}`);
+      if (config.host === '0.0.0.0') {
+        for (const addr of lanAddresses()) {
+          log.info(`  network  http://${addr}:${config.port}`);
+        }
+      }
       resolve(server);
     });
   });

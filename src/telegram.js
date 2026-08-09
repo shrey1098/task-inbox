@@ -4,6 +4,9 @@ const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
 const { explainScore } = require('./priority');
+const { createLogger } = require('./log');
+
+const log = createLogger('telegram');
 
 const API = `https://api.telegram.org/bot${config.telegram.token}`;
 
@@ -39,9 +42,7 @@ async function withRetry(label, fn) {
       return await fn();
     } catch (err) {
       if (isFatal(err)) throw err;
-      console.error(
-        `[telegram] ${label} failed (attempt ${attempt}): ${err.message} — retrying in ${delay / 1000}s`
-      );
+      log.warn(`${label} failed (attempt ${attempt}): ${err.message} — retrying in ${delay / 1000}s`);
       await sleep(delay);
       delay = Math.min(delay * 2, 60000);
     }
@@ -50,7 +51,7 @@ async function withRetry(label, fn) {
 
 function send(chatId, text) {
   return tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' }).catch((err) =>
-    console.error('[telegram] send failed:', err.message)
+    log.error('send failed:', err.message)
   );
 }
 
@@ -190,9 +191,24 @@ async function handleMessage(msg) {
     sent_at: msg.forward_origin?.date ? msg.forward_origin.date * 1000 : msg.date * 1000,
     raw: msg,
   });
-  if (!stored) return; // duplicate delivery
+  if (!stored) {
+    log.debug(`duplicate delivery of tg message ${msg.message_id} — ignored`);
+    return;
+  }
+
+  const preview = text.replace(/\s+/g, ' ').slice(0, 70);
+  log.info(
+    `message #${stored.id} from ${origin.name || 'you'}: "${preview}${text.length > 70 ? '…' : ''}"`
+  );
 
   const { tasks, note, error } = await processMessage(stored);
+  if (!error) {
+    log.info(
+      tasks.length
+        ? `→ ${tasks.length} task(s): ${tasks.map((t) => `#${t.id} ${t.title} [${Math.round(t.score)}]`).join('; ')}`
+        : `→ no task${note ? ` (${note})` : ''}`
+    );
+  }
 
   if (error) {
     await send(chatId, `⚠️ Could not process that message (${esc(error)}). It is saved and will be retried.`);
@@ -209,12 +225,12 @@ async function handleMessage(msg) {
 /** Long-poll loop. Offset is persisted so restarts don't replay old updates. */
 async function runBot() {
   if (!config.telegram.token) {
-    console.log('[telegram] TELEGRAM_BOT_TOKEN not set — bot disabled.');
+    log.warn('TELEGRAM_BOT_TOKEN not set — bot disabled.');
     return;
   }
 
   const me = await withRetry('getMe', () => tg('getMe'));
-  console.log(`[telegram] polling as @${me.username}`);
+  log.info(`polling as @${me.username}`);
 
   let offset = parseInt((await dbModule.getState('tg_offset')) ?? '0', 10);
   const pollSeconds = config.telegram.pollTimeoutSeconds;
@@ -230,7 +246,7 @@ async function runBot() {
       );
     } catch (err) {
       if (isFatal(err)) throw err;
-      console.error('[telegram] poll error:', err.message);
+      log.error('poll error:', err.message);
       await sleep(5000);
       continue;
     }
@@ -240,7 +256,7 @@ async function runBot() {
       try {
         if (update.message) await handleMessage(update.message);
       } catch (err) {
-        console.error('[telegram] handler error:', err);
+        log.error('handler error:', err);
       }
       await dbModule.setState('tg_offset', offset);
     }

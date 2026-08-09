@@ -48,6 +48,67 @@ Because scoring is local, ranks stay explainable, deadlines "heat up" without ex
 - `npm run server` starts the dashboard/API without the Telegram bot.
 - Everything the bot receives is stored in the `messages` collection, so the extractor can be re-run when you tweak the prompt.
 
+## Opening it on your phone
+
+The server binds `0.0.0.0` by default and prints every URL it is reachable on:
+
+```
+INFO  http listening on 0.0.0.0:3200
+INFO  http   local    http://localhost:3200
+INFO  http   network  http://192.168.1.24:3200
+```
+
+Open the `network` URL on your phone, on the same Wi-Fi. Set `HOST=127.0.0.1` to
+disable that and keep the dashboard on the machine only.
+
+**On WSL there is an extra hop.** WSL2 sits behind its own NAT, so the address
+above is a `172.x` one your phone cannot reach. Either:
+
+- **Mirrored networking (Windows 11, simplest).** Create `C:\Users\<you>\.wslconfig`:
+  ```ini
+  [wsl2]
+  networkingMode=mirrored
+  ```
+  Run `wsl --shutdown` from PowerShell and reopen. WSL now shares the Windows
+  network stack and the printed address is your real LAN IP.
+
+- **Port proxy (any Windows).** In an **admin** PowerShell:
+  ```powershell
+  netsh interface portproxy add v4tov4 listenport=3200 listenaddress=0.0.0.0 `
+    connectport=3200 connectaddress=(wsl hostname -I).Trim().Split()[0]
+  ```
+  Then browse to `http://<your-windows-LAN-IP>:3200`. Re-run it after each reboot,
+  since the WSL IP changes.
+
+Either way, allow the port through Windows Firewall once (admin PowerShell):
+
+```powershell
+New-NetFirewallRule -DisplayName "Task Inbox" -Direction Inbound `
+  -LocalPort 3200 -Protocol TCP -Action Allow -Profile Private
+```
+
+> The dashboard has **no authentication** — anyone on your network can read and
+> change tasks. That is usually fine on a home network; do not port-forward it to
+> the internet as-is.
+
+## Logs
+
+Output is timestamped and scoped, and colourised when the terminal supports it:
+
+```
+18:41:50.641 INFO  app       starting — model claude-opus-5, effort low, tz Asia/Kolkata
+18:41:50.642 INFO  app       mongo connected — task_inbox
+18:41:50.660 INFO  http      listening on 0.0.0.0:3200
+18:41:50.661 INFO  telegram  polling as @task_me_bot
+18:41:52.744 INFO  telegram  message #4 from Mom: "can you pay the electricity bill before friday"
+18:41:54.101 INFO  telegram  → 1 task(s): #7 Pay the electricity bill [78]
+18:41:54.180 INFO  http      GET    /api/tasks?status=open 200 6ms
+```
+
+`LOG_LEVEL=debug` adds static-asset requests, duplicate-delivery notices and
+rescoring runs; `LOG_LEVEL=warn` keeps only problems. `NO_COLOR=1` disables colour
+(useful when piping to a file: `npm start | tee run.log`).
+
 ## Troubleshooting
 
 **`fetch failed` / `ETIMEDOUT` reaching Telegram, but `curl` to the same URL works**
