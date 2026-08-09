@@ -1,8 +1,16 @@
 /* ---------------------------------------------------------------------------
    Task Inbox — design tokens
-   Palette is the validated data-viz reference instance. Light values live on
-   bare :root; dark values are declared twice (media query for the OS setting,
-   [data-theme] for the toggle) so the toggle wins in both directions.
+   ---------------------------------------------------------------------------
+   Every colour is a CSS custom property ("variable") declared here and used by
+   role below, so a theme swap changes one block instead of a hundred rules.
+
+   The theme is declared in THREE places on purpose:
+     1. bare :root                        → the light palette, the default
+     2. @media (prefers-color-scheme:dark)→ follows the operating system
+     3. :root[data-theme="dark"]          → the in-page toggle, which must be
+                                            able to override the OS either way
+   The :not([data-theme="light"]) guard on (2) is what lets someone on a
+   dark-mode OS still force light mode with the toggle.
 --------------------------------------------------------------------------- */
 
 :root {
@@ -21,12 +29,16 @@
   --accent:    #2a78d6;
   --accent-in: #ffffff;
 
-  /* Status — fixed roles, never themed. Always paired with a text label. */
+  /* Status — the Now/Soon/Later severity scale. These four are NOT themed:
+     they mean the same thing in both modes, and each already clears contrast
+     on both surfaces. Always paired with a text label, never colour alone. */
   --now:   #d03b3b;
   --soon:  #fab219;
   --later: #0ca30c;
 
-  /* Categorical slots, fixed order — never cycled, never reassigned by rank. */
+  /* Category identity colours, in a fixed order chosen so that adjacent hues
+     stay distinguishable to colour-blind readers. Assigned per category and
+     never reassigned by rank — a category keeps its colour as the list moves. */
   --cat-work:     #2a78d6;
   --cat-personal: #eb6834;
   --cat-finance:  #1baf7a;
@@ -103,6 +115,9 @@
 
 body {
   margin: 0;
+  /* A faint accent glow behind the page. color-mix() blends two colours at
+     runtime — here 11% accent into transparent — so the tint follows whatever
+     --accent the active theme set, with no second hard-coded value. */
   background:
     radial-gradient(1100px 520px at 12% -12%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 70%),
     var(--surface-0);
@@ -123,6 +138,7 @@ header {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 14px;
   padding: 16px 24px;
+  /* Semi-transparent + blur = content scrolls under a frosted header. */
   background: color-mix(in oklab, var(--surface-0) 82%, transparent);
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
@@ -245,6 +261,10 @@ header {
 .card:hover { transform: translateY(-2px); border-color: var(--line-2); }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 
+/* The coloured spine down the left edge of each card.
+   ::before injects a pseudo-element with no extra markup; inset: 0 auto 0 0 is
+   shorthand for top/bottom 0, left 0, right auto — a full-height 3px strip.
+   var(--tone, fallback) uses --tone when a data-bucket rule below has set it. */
 .card::before {
   content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
   background: var(--tone, var(--line-2));
@@ -258,10 +278,15 @@ header {
 .card .id { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 12.5px; }
 .card .details {
   color: var(--text-2); font-size: 13.5px; margin-top: 7px;
+  /* Truncate to 3 lines with an ellipsis. The -webkit- prefixes look obsolete
+     but remain the only cross-browser way to clamp by line count. */
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 
-/* Meter: fill carries severity, track is a translucent step of the same tone. */
+/* The score meter. The fill carries severity (the bucket's colour) and the
+   track is that same colour mixed down into the surface — so the bar reads as
+   one object at a glance rather than two unrelated colours. Width is set
+   inline by app.js as a percentage of the 0-100 score. */
 .meter { margin-top: 11px; display: flex; align-items: center; gap: 9px; }
 .meter .track {
   flex: 1; height: 4px; border-radius: 999px;
@@ -288,11 +313,15 @@ header {
 .chip.danger { color: var(--now); border-color: color-mix(in oklab, var(--now) 45%, var(--line)); }
 .chip.who { color: var(--text-2); }
 
+/* Action buttons rest at half opacity and come up on hover: present enough to
+   be discoverable, quiet enough not to compete with the task text. They stay
+   in the layout at all times so the card never changes height. */
 .actions {
   display: flex; gap: 6px; margin-top: 12px;
   opacity: .5; transition: opacity .16s var(--ease);
 }
 .card:hover .actions, .card:focus-within .actions { opacity: 1; }
+/* Touch devices have no hover, so show the buttons fully there. */
 @media (hover: none) { .actions { opacity: 1; } }
 
 .actions button {
@@ -304,6 +333,9 @@ header {
 .actions button.done:hover { color: var(--later); border-color: color-mix(in oklab, var(--later) 50%, var(--line)); }
 .actions button.drop:hover { color: var(--now);   border-color: color-mix(in oklab, var(--now) 50%, var(--line)); }
 
+/* Applied by app.js the moment an action button is clicked, before the server
+   has replied — the card slides away immediately and is restored if the
+   request fails. 'forwards' holds the final frame instead of snapping back. */
 .card.leaving { animation: leave .22s var(--ease) forwards; }
 @keyframes leave { to { opacity: 0; transform: translateX(14px) scale(.98); } }
 
@@ -313,6 +345,8 @@ header {
   border: 1px dashed var(--line); border-radius: var(--radius);
   padding: 22px 16px; text-align: center; color: var(--text-3); font-size: 13px;
 }
+/* Loading placeholder: a gradient wider than the element, animated across it
+   to give the familiar shimmer. */
 .skeleton {
   height: 92px; border-radius: var(--radius); margin-bottom: 11px;
   background: linear-gradient(100deg, var(--surface-1) 30%, var(--surface-2) 50%, var(--surface-1) 70%);
@@ -346,6 +380,8 @@ header {
   animation: rise .2s var(--ease) both;
 }
 
+/* Respect the OS "reduce motion" setting — animation can cause nausea or
+   migraines for some people, so honour it rather than treating it as optional. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

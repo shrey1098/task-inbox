@@ -1,27 +1,45 @@
 <!doctype html>
+<!--
+  index.html — the dashboard shell.
+
+  Deliberately almost empty: everything below the header is a placeholder that
+  app.js replaces once /api/tasks responds. The markup here exists to give app.js
+  stable hooks (#stats, #col-now .list, …) and to show a loading state before the
+  first fetch returns.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Without this, phones render at ~980px wide and shrink the page to fit. -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Tells the browser we support both themes, so native widgets (scrollbars,
+     form controls) match instead of staying stubbornly light. -->
 <meta name="color-scheme" content="light dark">
 <title>Task Inbox</title>
+<!-- Favicon as an inline SVG data URI — an emoji tab icon with no extra file. -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📥</text></svg>">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header>
+  <!-- aria-hidden on decorative elements stops screen readers announcing them. -->
   <span class="mark" aria-hidden="true">↓</span>
   <div class="brand">
     <h1>Task Inbox</h1>
     <span class="sub">forwarded → prioritised</span>
   </div>
+  <!-- Connection indicator. app.js sets data-state to live/stale/down; the CSS
+       colours it and stops the pulse animation when it isn't live. -->
   <span class="pulse" id="pulse" aria-hidden="true"></span>
   <span class="sub" id="synced">connecting…</span>
+  <!-- Cycles Auto → Light → Dark. Label is rewritten by applyTheme(). -->
   <button class="ghost" id="theme" type="button">Auto</button>
 </header>
 
 <main class="wrap">
+  <!-- Stat tiles. The four skeletons are shimmer placeholders, replaced wholesale
+       by renderStats() on first load — sized to match so nothing jumps. -->
   <section class="stats" id="stats" aria-label="Summary">
     <div class="skeleton" style="height:104px"></div>
     <div class="skeleton" style="height:104px"></div>
@@ -29,23 +47,29 @@
     <div class="skeleton" style="height:104px"></div>
   </section>
 
+  <!-- A real <form>, so Enter submits natively. app.js calls preventDefault()
+       and posts via fetch instead of navigating. -->
   <form class="capture" id="capture">
     <div class="field">
       <span class="icon" aria-hidden="true">✎</span>
       <input id="capture-text" autocomplete="off" spellcheck="false"
              placeholder="Paste a message and let Claude pull the task out…"
              aria-label="Capture a message">
+      <!-- Hint for the "/" shortcut; CSS hides it while the field has focus. -->
       <span class="kbd" aria-hidden="true">/</span>
     </div>
     <button id="capture-btn" type="submit">Add</button>
   </form>
 
+  <!-- The three priority columns. Each id (#col-now …) matches a key in app.js's
+       BUCKET map, and data-bucket drives the accent colour in CSS. Cards go into
+       .list; the skeletons are placeholders for the first paint. -->
   <div class="columns">
     <section class="col" id="col-now" data-bucket="now">
       <div class="col-head">
         <span class="bar" aria-hidden="true"></span>
         <span class="name">Now</span>
-        <span class="hint"></span>
+        <span class="hint"></span><!-- count, filled in by renderColumns() -->
       </div>
       <div class="list"><div class="skeleton"></div><div class="skeleton"></div></div>
     </section>
@@ -69,12 +93,16 @@
     </section>
   </div>
 
+  <!-- <details> gives collapse/expand with no JavaScript at all. -->
   <details class="done-panel">
     <summary>Completed<span id="done-count"></span></summary>
     <div id="done-list"></div>
   </details>
 </main>
 
+<!-- Loaded at the end of <body> so every element above already exists when the
+     script runs — app.js queries the DOM immediately, with no DOMContentLoaded
+     wrapper. -->
 <script src="app.js"></script>
 </body>
 </html>
