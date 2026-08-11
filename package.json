@@ -9,7 +9,7 @@
     "server": "node src/index.js --no-bot",
     "reprocess": "node src/reprocess.js",
     "adopt": "node src/migrate.js",
-    "test": "node test/auth.test.js"
+    "test": "node test/logic.test.js && node test/auth.test.js"
   },
   "license": "ISC",
   "dependencies": {

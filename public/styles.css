@@ -142,6 +142,11 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* The `hidden` attribute only sets display:none at the weakest possible
+   specificity, so any rule that gives an element a display value silently
+   overrides it. Several things here are flex when visible, so make hidden win. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg-grouped);
@@ -325,18 +330,25 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   background: radial-gradient(70% 90% at 12% -10%, rgb(255 255 255 / .30), transparent 60%);
 }
 
-.hero .ring { flex: none; position: relative; width: 62px; height: 62px; }
-.hero .ring svg { transform: rotate(-90deg); } /* start the arc at 12 o'clock */
-.hero .ring .track { stroke: rgb(255 255 255 / .28); }
-.hero .ring .arc {
-  stroke: #fff; stroke-linecap: round;
-  transition: stroke-dashoffset .9s var(--ease);
-}
-.hero .ring .pct {
+/* The ring is used in the hero and again in the stats sheet, so its geometry is
+   defined once here. Only the stroke colours are contextual — the label has to
+   centre inside the donut wherever it appears, which needs this element to be
+   the positioning context. */
+.ring { flex: none; position: relative; display: grid; place-items: center; }
+.ring svg { transform: rotate(-90deg); } /* start the arc at 12 o'clock */
+.ring .pct {
   position: absolute; inset: 0; display: grid; place-items: center;
   font-size: 14px; font-weight: 700; letter-spacing: -.02em;
   font-variant-numeric: tabular-nums;
 }
+.ring .track { stroke: var(--bg-tint-2); }
+.ring .arc {
+  stroke: var(--tint); stroke-linecap: round;
+  transition: stroke-dashoffset .9s var(--ease);
+}
+/* On the hero's coloured gradient the ring is white on translucent white. */
+.hero .ring .track { stroke: rgb(255 255 255 / .28); }
+.hero .ring .arc { stroke: #fff; }
 
 .hero .main { flex: 1; min-width: 0; position: relative; z-index: 1; }
 .hero .n {
@@ -646,6 +658,415 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .confetti { display: none; }
 }
+
+/* =========================================================================
+   The game layer, the extra views, and the sheets.
+   ========================================================================= */
+
+/* --------------------------------------------------------------- searchbar */
+
+.searchbar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 16px 10px; padding: 7px 11px;
+  background: var(--bg-tint); border-radius: var(--r-ctl);
+  color: var(--label-2);
+}
+.searchbar input {
+  flex: 1; min-width: 0; border: 0; background: none; color: var(--label);
+  font: inherit; font-size: 16px; /* <16px makes iOS Safari zoom on focus */
+}
+.searchbar input:focus { outline: none; }
+.searchbar input::-webkit-search-cancel-button { display: none; }
+.searchbar button { color: var(--tint); font-size: 15px; flex: none; }
+
+/* -------------------------------------------------------------- hero: game */
+
+/* The whole card is a button — tapping anywhere opens the stats sheet. */
+.hero-inner {
+  display: flex; align-items: center; gap: 15px;
+  width: 100%; text-align: left; color: inherit;
+  position: relative; z-index: 1;
+}
+
+.hero .ring .lvl { font-size: 21px; font-weight: 800; letter-spacing: -.03em; }
+.hero .ring .lvl.big { font-size: 30px; }
+
+.hero .main { flex: 1; min-width: 0; }
+
+/* Streak, XP, and distance to the next level — the three numbers a player
+   checks first, so they lead. */
+.hero .top {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.hero .top .streak { font-size: 21px; font-weight: 800; letter-spacing: -.03em; }
+.hero .top .xp { font-size: 14px; font-weight: 700; opacity: .95; }
+.hero .top .tonext { font-size: 12px; opacity: .75; }
+
+/* Today's goal as a row of pips. A bar would be more precise; pips read as
+   "three of five done" at a glance, which is the question being asked. */
+.hero .goal { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.hero .pips { display: flex; gap: 4px; }
+.hero .pips i {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: rgb(255 255 255 / .3);
+  transition: background .3s var(--ease), scale .3s var(--ease);
+}
+.hero .pips i.on { background: #fff; scale: 1.12; }
+.hero .goal-t { font-size: 12px; font-weight: 600; opacity: .85; }
+
+.hero .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hero .chips span {
+  background: rgb(255 255 255 / .22);
+  border-radius: 999px; padding: 2px 9px;
+  font-size: 12px; font-weight: 600;
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+/* The overdue chip is brighter than the rest — it is the one that matters. */
+.hero .chips span.hot { background: rgb(255 255 255 / .38); }
+
+.hero .next {
+  margin-top: 9px; font-size: 13px; opacity: .92;
+  display: flex; align-items: baseline; gap: 4px;
+}
+.hero .next b { font-weight: 700; flex: none; }
+/* The title truncates, not the label. text-overflow needs a block-ish box with
+   min-width:0, which a bare text node inside the flex row would not give us. */
+.hero .next .ttl {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------- celebration */
+
+/* "+18 XP" drifting up from the checkbox. Non-interactive and self-removing. */
+.xp-float {
+  position: fixed; z-index: 70; pointer-events: none;
+  translate: -50% 0;
+  font-size: 15px; font-weight: 800; letter-spacing: -.02em;
+  color: var(--green);
+  text-shadow: 0 1px 8px color-mix(in srgb, var(--green) 45%, transparent);
+  animation: rise-xp 1.2s var(--ease) forwards;
+}
+@keyframes rise-xp {
+  0%   { opacity: 0; translate: -50% 4px; scale: .8; }
+  22%  { opacity: 1; translate: -50% -8px; scale: 1.15; }
+  100% { opacity: 0; translate: -50% -52px; scale: 1; }
+}
+
+/* The level-up moment. Rare enough to be loud. */
+.levelup {
+  position: fixed; inset: 0; z-index: 80; pointer-events: none;
+  display: grid; place-items: center;
+  animation: fade-out 2.2s both;
+}
+.levelup-card {
+  padding: 26px 40px; border-radius: 26px; text-align: center; color: #fff;
+  background: linear-gradient(140deg, var(--purple), var(--indigo), var(--blue));
+  box-shadow: 0 24px 60px -20px var(--indigo);
+  animation: pop-in .5s var(--ease) both;
+}
+.levelup-n { font-size: 56px; font-weight: 850; letter-spacing: -.04em; line-height: 1; }
+.levelup-t {
+  font-size: 13px; font-weight: 700; letter-spacing: .14em;
+  text-transform: uppercase; opacity: .9; margin-top: 6px;
+}
+@keyframes pop-in { from { scale: .6; opacity: 0; } 60% { scale: 1.06; } to { scale: 1; opacity: 1; } }
+@keyframes fade-out { 0%, 78% { opacity: 1; } 100% { opacity: 0; } }
+
+/* --------------------------------------------------------- row escalation */
+
+/* Badges above the title: the loudest thing a row can say. */
+.row .badges { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 3px; }
+.row .badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .07em;
+  padding: 2px 7px; border-radius: 5px;
+}
+.row .badge.late { background: var(--red); color: #fff; }
+.row .badge.dup { background: var(--bg-tint-2); color: var(--label-2); }
+
+/* Three days late and the row stops being polite: a breathing red glow that
+   keeps it visible even when you have scrolled past it once. */
+.cell.critical .row {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--red) 16%, transparent), transparent 65%);
+}
+.cell.critical .row::after { animation: pulse-bar 2s ease-in-out infinite; }
+@keyframes pulse-bar {
+  50% { box-shadow: 0 0 14px 2px color-mix(in srgb, var(--red) 65%, transparent); }
+}
+.cell.critical .badge.late { animation: pulse-badge 2s ease-in-out infinite; }
+@keyframes pulse-badge { 50% { scale: 1.06; filter: brightness(1.15); } }
+
+/* A senior's request gets a gold edge — the visual counterpart of the score
+   floor that pins it to Now. */
+.cell.vip .row::after {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(var(--yellow), var(--orange));
+}
+/* When a task is both overdue and from a senior, overdue wins the stripe —
+   lateness is the more actionable fact. */
+.cell.vip.late .row::after { background: var(--red); }
+.row .sub .who.vip { color: var(--orange); font-weight: 650; }
+.row .sub .rep, .row .sub .wait { color: var(--label-2); }
+.row .sub .wait { font-style: italic; }
+
+/* ---------------------------------------------------------------- calendar */
+
+.cal {
+  background: var(--card-bg);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: .5px solid var(--card-border); border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
+  padding: 12px 10px 10px; margin-top: 8px;
+}
+.cal-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px; }
+.cal-title { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+.cal-nav {
+  width: 32px; height: 32px; border-radius: 50%; color: var(--tint);
+  display: grid; place-items: center;
+}
+.cal-nav:hover { background: var(--bg-tint); }
+
+.cal-week, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-week span {
+  text-align: center; font-size: 11px; font-weight: 600;
+  color: var(--label-3); padding-bottom: 4px;
+}
+.cal-grid { gap: 2px; }
+
+.cal-cell {
+  aspect-ratio: 1; border-radius: 9px; position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-variant-numeric: tabular-nums;
+  transition: background .15s var(--ease);
+}
+.cal-cell.blank { pointer-events: none; }
+.cal-cell .d { font-size: 14px; font-weight: 500; }
+.cal-cell:hover:not(.blank) { background: var(--bg-tint); }
+/* Today is marked by the number, not the cell, so it can coexist with the
+   selection ring without the two fighting. */
+.cal-cell.today .d { color: var(--tint); font-weight: 800; }
+.cal-cell.sel { background: var(--tint); }
+.cal-cell.sel .d, .cal-cell.sel.today .d { color: var(--on-tint); }
+.cal-cell.sel .dots i { box-shadow: 0 0 0 1.5px rgb(255 255 255 / .55); }
+
+.cal-cell .dots { display: flex; gap: 2px; height: 5px; }
+.cal-cell .dots i { width: 5px; height: 5px; border-radius: 50%; }
+.cal-cell .more { position: absolute; bottom: 1px; font-size: 8px; color: var(--label-3); }
+/* A day with something overdue on it gets a red tint of its own. */
+.cal-cell.has-late:not(.sel) { background: color-mix(in srgb, var(--red) 12%, transparent); }
+
+/* ------------------------------------------------------------------ people */
+
+/* A coloured monogram instead of an avatar — there are no photos in this
+   system, and initials are more legible than a generic silhouette. */
+.mono {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; color: #fff;
+  font-size: 14px; font-weight: 700; letter-spacing: -.01em;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 78%, #fff), var(--c));
+  box-shadow: 0 3px 10px -4px color-mix(in srgb, var(--c) 80%, transparent);
+}
+.cell.person .row { align-items: center; cursor: pointer; width: 100%; text-align: left; }
+.cell.person.vip .row::after {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: linear-gradient(var(--yellow), var(--orange));
+}
+.cell.person .row .score { margin-left: auto; }
+
+.back {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--tint); font-size: 15px; padding: 10px 2px 0;
+}
+
+/* ------------------------------------------------------------- tall sheets */
+
+/* Detail, stats and account can all outgrow the screen, so they scroll inside
+   themselves with the page behind them locked. */
+.sheet-tall {
+  max-height: 92dvh; overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain; /* don't hand a scroll back to the page */
+}
+body.locked { overflow: hidden; }
+
+.sheet-head {
+  margin: 20px 2px 8px; font-size: 13px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--label-2);
+}
+.sheet-note { margin: 0 2px 10px; font-size: 13px; color: var(--label-2); line-height: 1.4; }
+.sheet-loading { padding: 30px 0; text-align: center; color: var(--label-2); font-size: 14px; }
+
+/* Controls inside a grouped list row. */
+.sheet .group .line select,
+.sheet .group .line input[type="text"],
+.sheet .group .line input[type="datetime-local"] {
+  margin-left: auto; max-width: 62%;
+  background: none; border: 0; color: var(--label-2);
+  font: inherit; font-size: 15px; text-align: right;
+  /* 16px on mobile stops iOS Safari zooming when the field is focused. */
+}
+@media (max-width: 480px) {
+  .sheet .group .line select,
+  .sheet .group .line input { font-size: 16px; }
+}
+.sheet .group .line select { appearance: none; padding-right: 2px; }
+.sheet .group .line input:focus, .sheet .group .line select:focus {
+  outline: none; color: var(--tint);
+}
+
+/* An iOS switch. The checkbox itself is hidden but still focusable, so the
+   control stays keyboard-operable and announces its state to a screen reader. */
+.switch { margin-left: auto; display: inline-flex; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .track {
+  width: 51px; height: 31px; border-radius: 16px; background: var(--bg-tint-2);
+  position: relative; transition: background .2s var(--ease);
+}
+.switch .track::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 27px; height: 27px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 5px rgb(0 0 0 / .2);
+  transition: translate .22s var(--ease);
+}
+.switch input:checked + .track { background: var(--green); }
+.switch input:checked + .track::after { translate: 20px 0; }
+.switch input:focus-visible + .track { outline: 2px solid var(--tint); outline-offset: 2px; }
+
+/* -------------------------------------------------------------- detail sheet */
+
+.detail-title {
+  width: 100%; border: 0; background: none; color: var(--label);
+  font: inherit; font-size: 22px; font-weight: 680; letter-spacing: -.02em;
+  padding: 4px 0 8px; line-height: 1.25;
+  /* Grows with its content in browsers that support it; the min-height keeps
+     two lines visible everywhere else rather than clipping to one. */
+  resize: none; overflow: hidden; field-sizing: content; min-height: 2.5em;
+}
+.detail-title:focus { outline: none; border-bottom: 2px solid var(--tint); }
+
+/* The score and the sentence explaining it, side by side — the justification
+   for the ordering belongs on the face of the sheet, not in a hover. */
+.detail-score {
+  display: flex; align-items: center; gap: 11px; margin-bottom: 14px;
+  padding: 10px 12px; border-radius: var(--r-cell);
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+}
+.detail-score .n {
+  font-size: 24px; font-weight: 800; color: var(--c);
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.detail-score .why { font-size: 12.5px; color: var(--label-2); line-height: 1.35; }
+
+.detail-notes {
+  width: 100%; min-height: 74px; resize: vertical;
+  background: var(--bg-cell-2); border: 0; border-radius: var(--r-cell);
+  padding: 11px 12px; color: var(--label); font: inherit; font-size: 15px;
+}
+.detail-notes:focus { outline: 2px solid var(--tint); }
+.detail-actions { margin-top: 18px; }
+
+.warn {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: var(--r-cell);
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+  color: var(--label); font-size: 13px; line-height: 1.4;
+}
+.linkish { color: var(--tint); font-size: inherit; text-decoration: underline; }
+
+/* The original message. Visually quoted, so it is obvious this is somebody
+   else's words rather than the app's. */
+.source {
+  background: var(--bg-cell-2); border-radius: var(--r-cell);
+  padding: 12px; border-left: 3px solid var(--tint);
+}
+.source-head {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-size: 12px; color: var(--label-2); margin-bottom: 8px;
+}
+.source-head .from { font-weight: 650; color: var(--label); }
+.source-head .when { margin-left: auto; }
+.source-text { margin: 0; font-size: 14.5px; line-height: 1.45; white-space: pre-wrap; }
+/* A transcript is machine-heard, not typed — italics keep that distinction. */
+.source-text.transcript { font-style: italic; color: var(--label-2); }
+.source-img {
+  display: block; width: 100%; max-height: 340px; object-fit: contain;
+  border-radius: 8px; margin-bottom: 10px; background: var(--bg-tint);
+}
+
+/* --------------------------------------------------------------- stats sheet */
+
+.stat-hero { display: flex; align-items: center; gap: 18px; margin: 6px 0 16px; }
+.stat-hero .ring .track { stroke: var(--bg-tint-2); }
+.stat-hero .ring .arc { stroke: var(--tint); }
+.stat-lines .big { font-size: 22px; font-weight: 800; letter-spacing: -.03em; }
+.stat-lines .muted { font-size: 13px; color: var(--label-2); margin-top: 1px; }
+.stat-lines .flames { font-size: 16px; font-weight: 700; margin-top: 8px; }
+
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+.tile {
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+  border-radius: var(--r-cell); padding: 11px 12px;
+}
+.tile .n {
+  font-size: 21px; font-weight: 800; color: var(--c);
+  letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.tile .k { font-size: 11.5px; color: var(--label-2); margin-top: 2px; }
+
+/* A one-line stacked bar: the split by category, each in its own colour so it
+   matches the tiles on every row of the list. */
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 12px 0 8px; }
+.bar i { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--label-2); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 8px; height: 8px; border-radius: 2px; }
+
+.range { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 13px; color: var(--label-2); }
+.range input {
+  flex: 1; min-width: 0; padding: 8px 10px; font: inherit; font-size: 14px;
+  background: var(--bg-cell-2); border: 0; border-radius: 8px; color: var(--label);
+}
+
+/* ------------------------------------------------------------------- chips */
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-tint); border-radius: 999px;
+  padding: 5px 10px; font-size: 13px; font-weight: 600;
+}
+.chip.vip {
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+  color: color-mix(in srgb, var(--orange) 80%, var(--label));
+}
+.chip.muted { color: var(--label-3); font-weight: 400; }
+.chip button { font-size: 15px; line-height: 1; opacity: .6; padding: 0 1px; }
+.chip button:hover { opacity: 1; }
+
+/* The period picker in the stats sheet: chips that behave as radio buttons. */
+.chips.picker button {
+  background: var(--bg-tint); border-radius: 999px;
+  padding: 6px 12px; font-size: 13px; font-weight: 600; color: var(--label-2);
+  transition: background .15s var(--ease), color .15s var(--ease);
+}
+.chips.picker button.on { background: var(--tint); color: var(--on-tint); }
+
+.add-row { display: flex; gap: 8px; margin-bottom: 4px; }
+.add-row input {
+  flex: 1; min-width: 0; padding: 10px 12px; font: inherit; font-size: 16px;
+  background: var(--bg-cell-2); border: 0; border-radius: var(--r-cell); color: var(--label);
+}
+.add-row input:focus { outline: 2px solid var(--tint); }
+.btn-add {
+  padding: 10px 16px; border-radius: var(--r-cell); flex: none;
+  background: var(--tint); color: var(--on-tint); font-size: 15px; font-weight: 600;
+}
+
+/* ------------------------------------------------------------ toast action */
+
+.toast { display: inline-flex; align-items: center; gap: 14px; }
+.toast-action { color: var(--tint); font-weight: 700; font-size: 14px; flex: none; }
 
 /* ------------------------------------------------------------ auth screens */
 

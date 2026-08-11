@@ -14,7 +14,8 @@ require('./bootstrap-net');
 const config = require('./config');
 const dbModule = require('./db');
 const { startServer } = require('./server');
-const { runBot } = require('./telegram');
+const { runBot, send } = require('./telegram');
+const { startScheduler } = require('./scheduler');
 const { processPending } = require('./extractor');
 const { createLogger } = require('./log');
 
@@ -42,6 +43,10 @@ async function main() {
     log.info('--no-bot: Telegram polling disabled');
     return;
   }
+
+  // Digests, deadline nudges and the weekly review. Started only when there is
+  // a bot to send them through — without a token there is nowhere to deliver.
+  if (config.telegram.token) startScheduler(send);
 
   // NOT awaited: runBot loops forever, so awaiting it would never return.
   // Transient network failures are retried inside runBot; reaching this catch

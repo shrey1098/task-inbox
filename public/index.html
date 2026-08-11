@@ -4,8 +4,8 @@
 
   Almost everything below the nav bar is rendered by app.js; the markup here
   provides stable hooks and a loading state. Laid out as an iOS app: nav bar
-  with a collapsing large title, a segmented filter, an inset-grouped list,
-  and a tab bar pinned to the bottom.
+  with a collapsing large title, a segmented filter, inset-grouped lists, and a
+  tab bar. The sheets at the bottom are all off-screen until app.js adds .on.
 -->
 <html lang="en">
 <head>
@@ -29,8 +29,6 @@
 
   <header id="nav">
     <div class="nav-bar">
-      <!-- Leading: theme. Trailing: compose. Both are icon buttons, as iOS
-           prefers over labelled buttons in a nav bar. -->
       <button class="nav-btn" id="account-btn" type="button" aria-label="Account">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -39,7 +37,13 @@
       </button>
       <button class="nav-btn" id="theme" type="button" title="Theme" aria-label="Change theme"></button>
       <span class="nav-title">Inbox</span>
-      <button class="nav-btn nav-spacer" id="compose-btn" type="button" aria-label="New task">
+      <button class="nav-btn nav-spacer" id="search-btn" type="button" aria-label="Search">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>
+        </svg>
+      </button>
+      <button class="nav-btn" id="compose-btn" type="button" aria-label="New task">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round">
           <path d="M12 5v14M5 12h14"/>
@@ -55,6 +59,19 @@
       <p class="subtitle" id="synced">Updating…</p>
     </div>
 
+    <!-- Search field. Hidden until the magnifier is tapped; it replaces the
+         segmented control rather than stacking with it, so the header never
+         grows tall enough to push the list off screen. -->
+    <div class="searchbar" id="searchbar" hidden>
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>
+      </svg>
+      <input id="search-input" type="search" placeholder="Search tasks, people, notes"
+             autocomplete="off" autocapitalize="none" spellcheck="false">
+      <button id="search-cancel" type="button">Cancel</button>
+    </div>
+
     <!-- Segmented filter. The sliding thumb is positioned by app.js. -->
     <div class="seg" id="seg" role="tablist">
       <div class="seg-thumb" id="seg-thumb"></div>
@@ -66,9 +83,9 @@
   </header>
 
   <main id="main">
-    <!-- The hero card. Its whole contents — ring, counts, "up next" — are
-         rendered by app.js, and its gradient reflects how urgent today is. -->
-    <section class="hero" id="hero" aria-label="Overview"></section>
+    <!-- The player card: level, XP, streak, today's goal. Rendered by app.js;
+         tapping it opens the stats sheet. -->
+    <section class="hero" id="hero" aria-label="Your progress"></section>
     <div id="content">
       <!-- Skeleton rows shown until the first fetch resolves. -->
       <div class="list">
@@ -78,7 +95,8 @@
     <p class="list-footer" id="list-footer"></p>
   </main>
 
-  <!-- Two tabs: the open inbox and the completed archive. -->
+  <!-- Four tabs. Inbox is the list; Calendar is the same tasks by deadline;
+       People groups them by who asked; Done is the archive. -->
   <nav class="tabbar" id="tabbar">
     <button data-tab="inbox" class="on" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -88,17 +106,35 @@
       </svg>
       Inbox
     </button>
+    <button data-tab="calendar" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+           stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="5" width="18" height="16" rx="2.5"/>
+        <path d="M3 10h18M8 3v4M16 3v4"/>
+      </svg>
+      Calendar
+    </button>
+    <button data-tab="people" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="8" r="3.2"/><path d="M2.5 19c0-3.2 2.9-4.8 6.5-4.8s6.5 1.6 6.5 4.8"/>
+        <path d="M17 5.2a2.8 2.8 0 0 1 0 5.6M18.5 19c0-2-.6-3.4-1.8-4.3"/>
+      </svg>
+      People
+    </button>
     <button data-tab="done" type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
            stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/>
       </svg>
-      Completed
+      Done
     </button>
   </nav>
 
-  <!-- Compose sheet, hidden off-screen until .on is added. -->
+  <!-- One backdrop, shared by every sheet. -->
   <div class="backdrop" id="backdrop"></div>
+
+  <!-- Compose: prose in, Claude works out the task. -->
   <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="New task">
     <div class="grabber" aria-hidden="true"></div>
     <h2>New task</h2>
@@ -108,14 +144,27 @@
     <button class="btn-plain" id="compose-cancel" type="button">Cancel</button>
   </div>
 
-  <!-- Account sheet: identity, Telegram linking, sign out. -->
-  <div class="sheet" id="account-sheet" role="dialog" aria-modal="true" aria-label="Account">
+  <!-- Task detail: the whole record, editable, with the message it came from. -->
+  <div class="sheet sheet-tall" id="detail-sheet" role="dialog" aria-modal="true" aria-label="Task">
+    <div class="grabber" aria-hidden="true"></div>
+    <div id="detail-body"></div>
+  </div>
+
+  <!-- Stats: level, streak, and a summary for any period you pick. -->
+  <div class="sheet sheet-tall" id="stats-sheet" role="dialog" aria-modal="true" aria-label="Stats">
+    <div class="grabber" aria-hidden="true"></div>
+    <div id="stats-body"></div>
+  </div>
+
+  <!-- Account: identity, Telegram linking, seniors, digest preferences. -->
+  <div class="sheet sheet-tall" id="account-sheet" role="dialog" aria-modal="true" aria-label="Account">
     <div class="grabber" aria-hidden="true"></div>
     <h2>Account</h2>
     <div class="group">
       <div class="line"><span class="k">Signed in as</span><span class="v" id="acct-email">—</span></div>
       <div class="line"><span class="k">Telegram</span><span class="v" id="acct-tg">—</span></div>
     </div>
+
     <!-- Populated when the user asks for a link code. -->
     <div id="link-area" hidden>
       <div class="link-code" id="link-code">------</div>
@@ -125,6 +174,22 @@
     </div>
     <button class="btn-primary" id="link-btn" type="button">Link Telegram</button>
     <button class="btn-plain btn-danger" id="unlink-btn" type="button" hidden>Unlink Telegram</button>
+
+    <!-- Who outranks the clock. This is the authority rule's control surface. -->
+    <h3 class="sheet-head">Always top priority</h3>
+    <p class="sheet-note">
+      Anything these people ask for is pinned to <strong>Now</strong>, whatever the deadline says.
+    </p>
+    <div class="chips" id="seniors-list"></div>
+    <div class="add-row">
+      <input id="senior-input" type="text" placeholder="CO, Col. Mehta, Director…"
+             autocapitalize="words" spellcheck="false">
+      <button class="btn-add" id="senior-add" type="button">Add</button>
+    </div>
+
+    <h3 class="sheet-head">Nudges</h3>
+    <div class="group" id="settings-group"></div>
+
     <button class="btn-plain" id="logout-btn" type="button">Sign out</button>
     <button class="btn-plain" id="account-cancel" type="button">Done</button>
   </div>

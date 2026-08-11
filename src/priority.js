@@ -39,6 +39,49 @@ function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+/*
+ * Authority.
+ *
+ * A request from a CO or a senior officer is not merely "important" — it
+ * outranks its own timeline. Something the boss asked for with no deadline at
+ * all must not sink below a trivial errand that happens to be due today.
+ *
+ * Two mechanisms, because a bonus alone would not do it:
+ *   • AUTHORITY_BONUS adds points, so seniority still orders within the group.
+ *   • AUTHORITY_FLOOR is a minimum score, so such a task lands in "Now"
+ *     whatever the deadline arithmetic produced.
+ *
+ * The floor is 70 — exactly the "now" bucket threshold — so the rule reads as
+ * "the boss's asks are always Now", with the bonus then ranking them among
+ * themselves by urgency and deadline as usual.
+ */
+const AUTHORITY_BONUS = 18;
+const AUTHORITY_FLOOR = 70;
+
+/** True when this task came from someone the user has marked as senior. */
+function isFromSenior(task) {
+  return task.requester_rank === 'senior';
+}
+
+/**
+ * Decide a requester's rank against the user's list of senior names.
+ *
+ * Substring matching in both directions on purpose: the list may hold "CO"
+ * while the message says "the CO", or hold "Col. Mehta" while the forward
+ * header says "Col. Mehta (Ops)". Both should match. Single-character entries
+ * are ignored — they would match almost everything.
+ */
+function rankRequester(requester, seniors = []) {
+  const name = String(requester || '').trim().toLowerCase();
+  if (!name) return 'unknown';
+  for (const raw of seniors) {
+    const senior = String(raw || '').trim().toLowerCase();
+    if (senior.length < 2) continue;
+    if (name === senior || name.includes(senior) || senior.includes(name)) return 'senior';
+  }
+  return 'peer';
+}
+
 /**
  * The scoring formula. Four weighted components plus two nudges.
  *
@@ -73,11 +116,24 @@ function scoreTask(task, now = Date.now()) {
   const ageDays = Math.max(0, (now - createdAt) / DAY); // max(0,…) guards clock skew
   const stalenessPoints = Math.min(8, ageDays);
 
-  const raw = urgencyPoints + importancePoints + duePoints + quickWin + stalenessPoints;
+  // Authority: extra points, and then a floor applied after the clamp so it
+  // cannot itself be clamped away.
+  const authorityPoints = isFromSenior(task) ? AUTHORITY_BONUS : 0;
 
-  // Clamp to 0-100 (the nudges can push past 90), then round to one decimal:
-  // ×10, round, ÷10 is the standard trick for fixed-precision rounding.
-  return Math.round(clamp(raw, 0, 100) * 10) / 10;
+  // A task where you are waiting on somebody else is not yours to do right now.
+  // Nudging it down keeps the top of the list to things you can actually act
+  // on, without hiding it — it still ages upward via staleness.
+  const waitingPenalty = task.waiting_on ? -12 : 0;
+
+  const raw = urgencyPoints + importancePoints + duePoints
+    + quickWin + stalenessPoints + authorityPoints + waitingPenalty;
+
+  // Clamp to 0-100 (the nudges can push past 90), then apply the authority
+  // floor, then round to one decimal: ×10, round, ÷10 is the standard trick
+  // for fixed-precision rounding.
+  let final = clamp(raw, 0, 100);
+  if (isFromSenior(task) && !task.waiting_on) final = Math.max(final, AUTHORITY_FLOOR);
+  return Math.round(final * 10) / 10;
 }
 
 /** Which dashboard column a score lands in. */
@@ -94,10 +150,11 @@ function bucketOf(score) {
 function explainScore(task, now = Date.now()) {
   const urgency = clamp(task.urgency ?? 3, 1, 5);
   const importance = clamp(task.importance ?? 3, 1, 5);
-  const parts = [
-    `urgency ${urgency}/5`,
-    `importance ${importance}/5`,
-  ];
+  const parts = [];
+  // Listed first because it is the reason that overrides all the others.
+  if (isFromSenior(task)) parts.push(`from ${task.requester || 'a senior'} — always Now`);
+  parts.push(`urgency ${urgency}/5`, `importance ${importance}/5`);
+  if (task.waiting_on) parts.push('waiting on someone else');
 
   if (task.due_at) {
     const remaining = task.due_at - now;
@@ -169,4 +226,7 @@ module.exports = {
   rescoreOpenTasks,
   formatMinutes,
   formatDuration,
+  rankRequester,
+  isFromSenior,
+  AUTHORITY_FLOOR,
 };

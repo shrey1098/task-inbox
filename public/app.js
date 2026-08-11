@@ -1,21 +1,22 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// app.js — the dashboard, presented as an iOS app.
+// app.js — the dashboard, presented as an iOS app with a game layer.
 //
 // Plain browser JavaScript, no framework and no build step. The rendering model
-// is "fetch everything, rebuild the list" — wasteful in theory, completely fine
-// for a few dozen rows, and it removes a whole class of stale-state bugs.
+// is "fetch everything, rebuild the view" — wasteful in theory, completely fine
+// for a few hundred rows, and it removes a whole class of stale-state bugs.
 //
-// The iOS-specific behaviour lives in three places:
+// Four views share one shell: Inbox (grouped by priority), Calendar (the same
+// tasks by deadline), People (grouped by who asked) and Done. On top of that
+// sits the part that makes it something you want to open: a level, an XP bar, a
+// streak, a daily goal, and a small celebration every time you finish something.
+//
+// The iOS-specific behaviour lives in a few places:
 //   • the collapsing large title (scroll listener → .scrolled on the nav)
 //   • the segmented control's sliding thumb (measured, not CSS-only)
 //   • swipe-to-action rows (pointer events, so a mouse drag works too)
-//
-// The colour of the app is not fixed: the hero card's gradient and the ambient
-// blobs behind the page are both derived from the current state of the list
-// (see MOODS / applyMood), so a clear inbox and an overdue one do not just show
-// different numbers, they feel different.
+//   • sheets that slide up over a dimmed, blurred backdrop
 // ---------------------------------------------------------------------------
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -35,6 +36,7 @@ const CATEGORY = {
   health:   { color: 'var(--red)',    path: 'M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9z' },
   other:    { color: 'var(--purple)', path: 'M4 6h16M4 12h16M4 18h10' },
 };
+const CATEGORY_KEYS = Object.keys(CATEGORY);
 
 // Bucket → label and colour. Order matters: it drives the segmented control.
 const BUCKETS = {
@@ -60,17 +62,39 @@ const MOODS = [
   { key: 'clear', when: () => true,           hero: ['--green', '--teal'],  amb: ['--green', '--teal', '--blue'] },
 ];
 
-/** Longest stagger delay we will ever apply, in rows. Beyond this the animation
- *  delay stops growing, so a 60-item list still finishes appearing promptly. */
+/** Longest stagger delay we will ever apply, in rows. */
 const MAX_STAGGER = 12;
+
+const DAY = 86400000;
+
+/** Two completions inside this window count as a combo. */
+const COMBO_MS = 120000;
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
 
 /* ------------------------------------------------------------------ state */
 
 const state = {
-  tab: 'inbox',    // 'inbox' | 'done'
-  filter: 'all',   // 'all' | 'now' | 'soon' | 'later'
+  tab: 'inbox',      // 'inbox' | 'calendar' | 'people' | 'done'
+  filter: 'all',     // 'all' | 'now' | 'soon' | 'later'
   open: [],
   done: [],
+  game: null,        // level / xp / streak, from /api/game
+  people: [],
+  settings: null,
+  // Calendar: which month is shown, and which day is selected inside it.
+  month: startOfMonth(Date.now()),
+  selectedDay: startOfDay(Date.now()),
+  // Search: null when the field is closed, a string when it is open.
+  search: null,
+  searchResults: [],
+  // People: the requester currently drilled into, or null for the list.
+  person: undefined,
+  // Combo tracking — the timestamp of the last completion.
+  lastDone: 0,
+  combo: 0,
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -81,6 +105,8 @@ function el(tag, attrs = {}, children = []) {
     if (v == null || v === false) continue;
     if (k === 'class') node.className = v;
     else if (k === 'style') node.style.cssText = v;
+    else if (k === 'value') node.value = v;          // inputs need the property
+    else if (k === 'checked') node.checked = Boolean(v);
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v);
   }
@@ -129,35 +155,33 @@ function icon(path, { size = 20, width = 1.8, fill = 'none' } = {}) {
  * then offsetting the dash by the unfinished portion — the standard trick, and
  * the reason the fill animates smoothly when only the offset changes.
  */
-function ring(fraction) {
+function ring(fraction, { size = 62, stroke = 6, label = null } = {}) {
   const ns = 'http://www.w3.org/2000/svg';
-  const R = 26;
-  const CIRC = 2 * Math.PI * R;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
 
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 62 62');
-  svg.setAttribute('width', 62);
-  svg.setAttribute('height', 62);
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
   svg.setAttribute('fill', 'none');
   svg.setAttribute('aria-hidden', 'true');
 
   for (const cls of ['track', 'arc']) {
     const c = document.createElementNS(ns, 'circle');
-    c.setAttribute('cx', 31); c.setAttribute('cy', 31); c.setAttribute('r', R);
-    c.setAttribute('stroke-width', 6);
+    c.setAttribute('cx', size / 2); c.setAttribute('cy', size / 2); c.setAttribute('r', r);
+    c.setAttribute('stroke-width', stroke);
     c.setAttribute('class', cls);
     if (cls === 'arc') {
-      c.setAttribute('stroke-dasharray', CIRC);
+      c.setAttribute('stroke-dasharray', circ);
       // Offset = the part NOT filled. fraction 1 → offset 0 → full circle.
-      c.setAttribute('stroke-dashoffset', CIRC * (1 - fraction));
+      c.setAttribute('stroke-dashoffset', circ * (1 - Math.max(0, Math.min(1, fraction))));
     }
     svg.append(c);
   }
 
-  return el('div', { class: 'ring' }, [
-    svg,
-    el('div', { class: 'pct' }, `${Math.round(fraction * 100)}%`),
-  ]);
+  return el('div', { class: 'ring', style: `width:${size}px;height:${size}px` },
+    [svg, label != null ? el('div', { class: 'pct' }, label) : null].filter(Boolean));
 }
 
 /**
@@ -176,13 +200,15 @@ function applyMood(counts) {
   return mood;
 }
 
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 /**
  * A short burst of coloured pieces from a point on screen. Each piece gets a
  * random direction and spin as inline custom properties; the CSS animation does
  * the rest and the container removes itself once the longest one finishes.
  */
-function confetti(fromEl) {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+function confetti(fromEl, count = 12) {
+  if (reducedMotion()) return;
   const box = fromEl.getBoundingClientRect();
   const wrap = el('div', {
     class: 'confetti',
@@ -190,11 +216,11 @@ function confetti(fromEl) {
   });
   const colors = ['--blue', '--green', '--orange', '--pink', '--purple', '--yellow'];
 
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < count; i += 1) {
     // Spread over a full circle, with enough jitter that the burst does not
     // read as a clock face.
-    const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.5;
-    const dist = 34 + Math.random() * 34;
+    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+    const dist = 34 + Math.random() * 40;
     wrap.append(el('i', {
       style: [
         `background: var(${colors[i % colors.length]})`,
@@ -209,14 +235,54 @@ function confetti(fromEl) {
   setTimeout(() => wrap.remove(), 900); // just past the 750ms animation
 }
 
+/** "+18 XP" floating up from a point — the small, immediate reward. */
+function floatXp(fromEl, text) {
+  if (reducedMotion()) return;
+  const box = fromEl.getBoundingClientRect();
+  const node = el('div', {
+    class: 'xp-float',
+    style: `left:${box.left + box.width / 2}px; top:${box.top}px`,
+  }, text);
+  document.body.append(node);
+  setTimeout(() => node.remove(), 1200);
+}
+
+/** The full-screen moment when a level ticks over. Rare, so it can be loud. */
+function levelUpBanner(level) {
+  const node = el('div', { class: 'levelup' }, [
+    el('div', { class: 'levelup-card' }, [
+      el('div', { class: 'levelup-n' }, String(level)),
+      el('div', { class: 'levelup-t' }, 'Level up'),
+    ]),
+  ]);
+  document.body.append(node);
+  confetti(node, 26);
+  setTimeout(() => node.remove(), 2200);
+}
+
 let toastTimer;
-function toast(msg) {
+/**
+ * The floating capsule. `action` adds a button — that is how Undo is offered,
+ * which is why every destructive gesture in the app can be taken back.
+ */
+function toast(msg, action = null) {
   $('#toast')?.remove();
   if (!msg) return;
-  const node = el('div', { class: 'toast', id: 'toast', role: 'status' }, msg);
+
+  const node = el('div', { class: 'toast', id: 'toast', role: 'status' }, [
+    el('span', {}, msg),
+    action ? el('button', {
+      class: 'toast-action',
+      type: 'button',
+      onclick: () => { node.remove(); action.run(); },
+    }, action.label) : null,
+  ].filter(Boolean));
+
   document.body.append(node);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => node.remove(), 5000);
+  // Longer when there is something to click — five seconds is not enough time
+  // to notice an Undo, decide, and reach it.
+  toastTimer = setTimeout(() => node.remove(), action ? 8000 : 5000);
 }
 
 async function api(path, opts = {}) {
@@ -238,15 +304,25 @@ async function api(path, opts = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-/** Compact relative time, iOS-style: "3h", "Yesterday", "in 2d". */
+/* ------------------------------------------------------------ time helpers */
+
+/** Compact relative time, iOS-style: "3h", "in 2d". */
 function relative(ts) {
   const diff = ts - Date.now();
   const abs = Math.abs(diff);
   const mins = Math.round(abs / 60000);
   const unit = mins < 60 ? `${mins}m`
-    : abs < 86400000 ? `${Math.round(abs / 3600000)}h`
-    : `${Math.round(abs / 86400000)}d`;
+    : abs < DAY ? `${Math.round(abs / 3600000)}h`
+    : `${Math.round(abs / DAY)}d`;
   return diff >= 0 ? `in ${unit}` : `${unit} ago`;
+}
+
+/** Just the magnitude: "2d", "6h" — for badges where "ago" is implied. */
+function shortDuration(ms) {
+  const abs = Math.abs(ms);
+  if (abs < 3600000) return `${Math.max(1, Math.round(abs / 60000))}m`;
+  if (abs < DAY) return `${Math.round(abs / 3600000)}h`;
+  return `${Math.round(abs / DAY)}d`;
 }
 
 function exactTime(ts) {
@@ -255,10 +331,38 @@ function exactTime(ts) {
   });
 }
 
+function startOfDay(ts) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function startOfMonth(ts) {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+}
+
+/** An epoch time as the value a <input type="datetime-local"> expects. */
+function toLocalInput(ts) {
+  if (!ts) return '';
+  const d = new Date(ts - d0(ts));
+  return d.toISOString().slice(0, 16);
+}
+/** The timezone offset in ms, so toISOString can be used for a LOCAL value. */
+function d0(ts) {
+  return new Date(ts).getTimezoneOffset() * 60000;
+}
+
 /* -------------------------------------------------------------------- rows */
 
-/** Optimistically remove a row, then confirm with the server. */
-async function mutate(cell, id, fields, failMsg) {
+/**
+ * Apply a change optimistically: collapse the row away immediately, then
+ * confirm with the server and roll back if it refused.
+ *
+ * `undo` describes how to reverse it. When present the confirmation toast gets
+ * an Undo button — the reason dropping something by accident is recoverable.
+ */
+async function mutate(cell, id, fields, failMsg, undo = null) {
   // Collapse the row to zero height so the list closes up smoothly, the way an
   // iOS list animates a deletion.
   cell.style.height = `${cell.offsetHeight}px`;
@@ -269,14 +373,67 @@ async function mutate(cell, id, fields, failMsg) {
   });
 
   try {
-    await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+    const result = await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+    if (undo) {
+      toast(undo.message, {
+        label: 'Undo',
+        run: async () => {
+          try {
+            await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(undo.fields) });
+            refresh();
+          } catch (err) {
+            toast(`Could not undo: ${err.message}`);
+          }
+        },
+      });
+    }
     refresh();
+    return result;
   } catch (err) {
     // Undo the optimistic removal — the task is still there.
     cell.classList.remove('removing');
     cell.style.height = '';
     cell.style.opacity = '';
     toast(`${failMsg}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Completing a task: the same PATCH as any other, wrapped in the celebration.
+ *
+ * The server returns the XP and level after the change, so the client never
+ * computes the score itself — it only decides how loudly to announce it.
+ */
+async function completeTask(cell, check, task) {
+  check.classList.add('on', 'just');
+  confetti(check);
+
+  // Combo: finishing several in quick succession is worth calling out.
+  const now = Date.now();
+  state.combo = now - state.lastDone < COMBO_MS ? state.combo + 1 : 1;
+  state.lastDone = now;
+
+  const before = state.game?.level ?? 1;
+  floatXp(check, `+${task.xp ?? 10} XP`);
+
+  const result = await mutate(
+    cell, task.id, { status: 'done' }, 'Could not complete',
+    { message: `Done: ${task.title}`, fields: { status: 'open', completed_at: null } }
+  );
+  if (!result) return;
+
+  if (result.game) {
+    state.game = result.game;
+    if (result.game.level > before) levelUpBanner(result.game.level);
+  }
+  // A spawned recurrence is worth mentioning — otherwise it looks like the task
+  // you just completed came straight back as a bug.
+  if (result.next_occurrence) {
+    const due = result.next_occurrence.due_at;
+    toast(`🔁 Next one ${due ? relative(due).replace('in ', 'in ') : 'scheduled'}`);
+  } else if (state.combo >= 2) {
+    toast(`🔥 ${state.combo} in a row`);
   }
 }
 
@@ -287,20 +444,21 @@ async function mutate(cell, id, fields, failMsg) {
  * scrolling still works. The axis is decided once, on the first few pixels of
  * movement, and then locked — otherwise a diagonal drag fights the scroller.
  */
-function attachSwipe(cell, row, openW) {
-  let startX = 0, startY = 0, dx = 0, axis = null, dragging = false;
+function attachSwipe(cell, row, openW, onTap) {
+  let startX = 0, startY = 0, dx = 0, axis = null, dragging = false, moved = false;
 
   row.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;         // ignore right-click
+    if (e.button !== 0) return;             // ignore right-click
     if (e.target.closest('.check')) return; // let the circle handle its own tap
     startX = e.clientX; startY = e.clientY;
-    dx = 0; axis = null; dragging = true;
+    dx = 0; axis = null; dragging = true; moved = false;
   });
 
   row.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const mx = e.clientX - startX;
     const my = e.clientY - startY;
+    if (Math.abs(mx) > 4 || Math.abs(my) > 4) moved = true;
 
     // Lock the axis once movement is unambiguous (>6px in one direction).
     if (!axis) {
@@ -332,6 +490,11 @@ function attachSwipe(cell, row, openW) {
     if (axis === 'x') {
       // Past a third of the way = open; otherwise snap shut.
       cell.classList.toggle('open', dx < -openW / 3);
+    } else if (!moved) {
+      // A tap, not a drag. A swiped-open row closes instead of opening detail,
+      // which is what every iOS list does.
+      if (cell.classList.contains('open')) cell.classList.remove('open');
+      else onTap?.();
     }
     axis = null;
   };
@@ -343,10 +506,17 @@ function attachSwipe(cell, row, openW) {
 function taskRow(task) {
   const isDone = task.status === 'done';
   const cat = CATEGORY[task.category] || CATEGORY.other;
+  const senior = task.requester_rank === 'senior';
 
-  // .late gives the row its red wash and leading bar; the subtitle still says
-  // "Overdue" in words, so the state is never carried by colour alone.
-  const cell = el('div', { class: `cell ${task.overdue && !isDone ? 'late' : ''}` });
+  // Overdue escalates in three tiers, because "an hour late" and "a week late"
+  // are not the same problem and should not look the same.
+  const lateDays = task.overdue ? task.overdue_by / DAY : 0;
+  const tier = !task.overdue ? '' : lateDays >= 3 ? 'critical' : lateDays >= 1 ? 'late' : 'due';
+
+  const cell = el('div', {
+    class: ['cell', task.overdue && !isDone ? 'late' : '', tier === 'critical' && !isDone ? 'critical' : '',
+      senior && !isDone ? 'vip' : ''].filter(Boolean).join(' '),
+  });
 
   // --- the completion circle. --c is the category colour, which the circle
   //     fills with when ticked and which the bloom ring borrows.
@@ -357,13 +527,12 @@ function taskRow(task) {
     'aria-label': isDone ? 'Mark not done' : 'Mark done',
     onclick: (e) => {
       e.stopPropagation();
-      const next = isDone ? { status: 'open' } : { status: 'done' };
-      check.classList.toggle('on');           // instant visual feedback
-      if (!isDone) {
-        check.classList.add('just');          // the expanding ring
-        confetti(check);                      // …and the small celebration
+      if (isDone) {
+        check.classList.remove('on');
+        setTimeout(() => mutate(cell, task.id, { status: 'open' }, 'Could not reopen'), 160);
+      } else {
+        completeTask(cell, check, task);
       }
-      setTimeout(() => mutate(cell, task.id, next, 'Could not update'), 160);
     },
   }, icon('M5 12.5l4.5 4.5L19 7.5', { size: 13, width: 2.6 }));
 
@@ -388,7 +557,11 @@ function taskRow(task) {
     const e = task.effort_minutes;
     sub.push(el('span', {}, e < 60 ? `${e} min` : `${e / 60} hr`));
   }
-  if (task.requester) sub.push(el('span', { class: 'who' }, task.requester));
+  if (task.requester) {
+    sub.push(el('span', { class: `who ${senior ? 'vip' : ''}` }, senior ? `★ ${task.requester}` : task.requester));
+  }
+  if (task.repeat_text) sub.push(el('span', { class: 'rep' }, `🔁 ${task.repeat_text}`));
+  if (task.waiting_on) sub.push(el('span', { class: 'wait' }, 'waiting'));
 
   // Interleave "·" separators between whatever pieces exist.
   const subLine = [];
@@ -397,10 +570,17 @@ function taskRow(task) {
     subLine.push(node);
   });
 
+  const badges = [];
+  if (tier === 'late' || tier === 'critical') {
+    badges.push(el('span', { class: `badge late ${tier}` }, `${shortDuration(task.overdue_by)} LATE`));
+  }
+  if (task.dup_of) badges.push(el('span', { class: 'badge dup' }, `DUPLICATE OF #${task.dup_of}`));
+
   const row = el('div', { class: `row ${isDone ? 'done' : ''}` }, [
     check,
     catTile,
     el('div', { class: 'body' }, [
+      badges.length ? el('div', { class: 'badges' }, badges) : null,
       el('div', { class: 't' }, task.title),
       subLine.length ? el('div', { class: 'sub' }, subLine) : null,
       task.details ? el('div', { class: 'detail' }, task.details) : null,
@@ -424,11 +604,11 @@ function taskRow(task) {
     return d.getTime();
   };
 
-  const swipeBtn = (cls, label, path, fields, failMsg) =>
+  const swipeBtn = (cls, label, path, fields, failMsg, undo) =>
     el('button', {
       class: cls,
       type: 'button',
-      onclick: () => mutate(cell, task.id, fields, failMsg),
+      onclick: () => mutate(cell, task.id, fields, failMsg, undo),
     }, [icon(path, { size: 19, width: 1.9 }), label]);
 
   const actions = isDone
@@ -436,74 +616,97 @@ function taskRow(task) {
         { status: 'open' }, 'Could not reopen')]
     : [
         swipeBtn('snooze', 'Tomorrow', 'M12 7v5l3 2M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z',
-          { status: 'snoozed', snooze_until: tomorrow8() }, 'Could not snooze'),
+          { status: 'snoozed', snooze_until: tomorrow8() }, 'Could not snooze',
+          { message: `Snoozed: ${task.title}`, fields: { status: 'open', snooze_until: null } }),
         swipeBtn('drop', 'Drop', 'M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13',
-          { status: 'dropped' }, 'Could not drop'),
+          { status: 'dropped' }, 'Could not drop',
+          { message: `Dropped: ${task.title}`, fields: { status: 'open' } }),
       ];
 
   const openW = actions.length * SWIPE_BTN_W;
   cell.style.setProperty('--swipe-w', `${openW}px`);
   cell.append(el('div', { class: 'swipe' }, actions), row);
-  attachSwipe(cell, row, openW);
+  attachSwipe(cell, row, openW, () => openDetail(task.id));
   return cell;
 }
 
-/* --------------------------------------------------------------- rendering */
+/**
+ * Build the rows of one list, tagging each with its position so the CSS can
+ * stagger them in. The index is capped so a long list still finishes appearing
+ * quickly instead of trickling in for a second and a half.
+ */
+function rowsOf(tasks) {
+  return tasks.map((task, i) => {
+    const cell = taskRow(task);
+    cell.style.setProperty('--i', String(Math.min(i, MAX_STAGGER)));
+    return cell;
+  });
+}
+
+/* --------------------------------------------------------------- the hero */
 
 /**
- * The hero card: a progress ring for the day, the open count, state chips, and
- * whichever task the score says to do next. Rendering it also sets the app's
- * mood, which is why it runs even on the Completed tab.
+ * The player card: level ring, XP bar, streak, today's goal, and whichever task
+ * the score says to do next. Rendering it also sets the app's mood.
  */
 function renderHero() {
-  const startOfDay = new Date().setHours(0, 0, 0, 0);
-  const doneToday = state.done.filter((t) => (t.completed_at ?? 0) >= startOfDay).length;
-
   const counts = {
     open: state.open.length,
     now: state.open.filter((t) => t.bucket === 'now').length,
     overdue: state.open.filter((t) => t.overdue).length,
-    doneToday,
   };
-
-  // The mood is applied on every tab — the ambient colour should not jump when
-  // you glance at the archive — but the card itself is about the inbox, so it
-  // is hidden there rather than showing open-task stats above completed rows.
   const mood = applyMood(counts);
+
+  // The card is about the inbox, so it is hidden on the archive — but the mood
+  // is applied on every tab, so the ambient colour does not jump when you look.
   $('#hero').style.display = state.tab === 'done' ? 'none' : '';
   if (state.tab === 'done') return;
 
-  // Today's progress: finished today, over everything that could still be
-  // finished today. Both zero means an empty day, which we show as a full ring
-  // rather than 0% — nothing outstanding is a complete day, not a failed one.
-  const total = doneToday + counts.open;
-  const fraction = total === 0 ? 1 : doneToday / total;
+  const g = state.game;
+  if (!g) return; // first paint, before /api/game has answered
 
-  const chips = [];
-  if (counts.overdue) chips.push(`${counts.overdue} overdue`);
-  if (counts.now) chips.push(`${counts.now} urgent`);
-  chips.push(doneToday === 1 ? '1 done today' : `${doneToday} done today`);
+  // Goal pips: one per task in today's target, filled as they are completed.
+  // Capped at ten so a goal of twenty does not become a wall of dots.
+  const pipCount = Math.min(10, g.daily_goal);
+  const pips = [];
+  for (let i = 0; i < pipCount; i += 1) {
+    pips.push(el('i', { class: i < g.done_today ? 'on' : '' }));
+  }
+  // Anything beyond the goal is a bonus, and worth showing off.
+  const extra = Math.max(0, g.done_today - g.daily_goal);
 
-  // The list arrives sorted by score, so the first open task is the top one.
   const next = state.open[0];
 
-  const headline = counts.open === 0
-    ? el('div', { class: 'n' }, mood.key === 'clear' && doneToday ? 'All clear' : 'Nothing due')
-    : el('div', { class: 'n' }, [
-        String(counts.open),
-        el('small', {}, counts.open === 1 ? 'task open' : 'tasks open'),
-      ]);
-
   $('#hero').replaceChildren(
-    ring(fraction),
-    el('div', { class: 'main' }, [
-      headline,
-      el('div', { class: 'chips' }, chips.map((c) => el('span', {}, c))),
-      next ? el('div', { class: 'next', title: next.title }, [
-        el('b', {}, 'Up next'),
-        el('span', { class: 'ttl' }, `· ${next.title}`),
-      ]) : null,
-    ].filter(Boolean))
+    el('button', {
+      class: 'hero-inner',
+      type: 'button',
+      'aria-label': 'Open stats',
+      onclick: openStats,
+    }, [
+      ring(g.progress, { size: 66, stroke: 6, label: el('span', { class: 'lvl' }, String(g.level)) }),
+      el('div', { class: 'main' }, [
+        el('div', { class: 'top' }, [
+          el('span', { class: 'streak' }, `🔥 ${g.streak}`),
+          el('span', { class: 'xp' }, `${g.xp} XP`),
+          el('span', { class: 'tonext' }, `${g.to_next} to L${g.level + 1}`),
+        ]),
+        el('div', { class: 'goal' }, [
+          el('div', { class: 'pips' }, pips),
+          el('span', { class: 'goal-t' },
+            extra > 0 ? `goal smashed +${extra}` : `${g.done_today}/${g.daily_goal} today`),
+        ]),
+        el('div', { class: 'chips' }, [
+          counts.overdue ? el('span', { class: 'hot' }, `${counts.overdue} overdue`) : null,
+          counts.now ? el('span', {}, `${counts.now} urgent`) : null,
+          el('span', {}, `${counts.open} open`),
+        ].filter(Boolean)),
+        next ? el('div', { class: 'next', title: next.title }, [
+          el('b', {}, 'Up next'),
+          el('span', { class: 'ttl' }, `· ${next.title}`),
+        ]) : el('div', { class: 'next' }, mood.key === 'clear' ? 'Inbox zero. Go outside.' : ''),
+      ]),
+    ])
   );
 }
 
@@ -549,56 +752,29 @@ function moveThumb() {
   thumb.style.width = `${active.offsetWidth}px`;
 }
 
-function emptyState() {
-  if (state.tab === 'done') {
-    return el('div', { class: 'empty' }, [
-      el('div', { class: 'glyph' }, icon('M5 13l4 4L19 7', { size: 40, width: 1.4 })),
-      el('h3', {}, 'Nothing completed yet'),
-      el('p', {}, 'Finished tasks collect here.'),
-    ]);
-  }
-  const filtered = state.filter !== 'all';
+function emptyState(title, body, gradient = 'var(--green), var(--teal)') {
   return el('div', { class: 'empty' }, [
-    el('div', { class: 'glyph' }, icon('M3 13h4l2 3h6l2-3h4M5 5h14l2 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z', { size: 40, width: 1.4 })),
-    el('h3', {}, filtered ? `Nothing in ${BUCKETS[state.filter].name}` : 'Inbox zero'),
-    el('p', {}, filtered ? 'Try another filter.' : 'Forward a message to your bot to add one.'),
+    el('div', { class: 'glyph', style: `background:linear-gradient(145deg, ${gradient})` },
+      icon('M5 13l4 4L19 7', { size: 34, width: 2 })),
+    el('h3', {}, title),
+    el('p', {}, body),
   ]);
 }
 
-/**
- * Build the rows of one list, tagging each with its position so the CSS can
- * stagger them in. The index is capped so a long list still finishes appearing
- * quickly instead of trickling in for a second and a half.
- */
-function rowsOf(tasks) {
-  return tasks.map((task, i) => {
-    const cell = taskRow(task);
-    cell.style.setProperty('--i', String(Math.min(i, MAX_STAGGER)));
-    return cell;
-  });
-}
+/* ------------------------------------------------------------- inbox view */
 
-function renderList() {
+function renderInbox() {
   const content = $('#content');
-
-  if (state.tab === 'done') {
-    const rows = state.done.slice(0, 50);
-    content.replaceChildren(
-      rows.length ? el('div', { class: 'list' }, rowsOf(rows)) : emptyState()
-    );
-    $('#list-footer').textContent = state.done.length
-      ? `${state.done.length} completed`
-      : '';
-    return;
-  }
-
-  // Inbox: optionally filtered, then grouped into Now / Soon / Later sections.
   const tasks = state.filter === 'all'
     ? state.open
     : state.open.filter((t) => t.bucket === state.filter);
 
   if (tasks.length === 0) {
-    content.replaceChildren(emptyState());
+    const filtered = state.filter !== 'all';
+    content.replaceChildren(emptyState(
+      filtered ? `Nothing in ${BUCKETS[state.filter].name}` : 'Inbox zero',
+      filtered ? 'Try another filter.' : 'Forward a message to your bot to add one.'
+    ));
     $('#list-footer').textContent = '';
     return;
   }
@@ -620,14 +796,223 @@ function renderList() {
   $('#list-footer').textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
 }
 
+/* ---------------------------------------------------------- calendar view */
+
+/**
+ * A month grid with a dot per task, and the selected day's tasks underneath.
+ *
+ * Built from the tasks already in memory rather than a separate fetch: the open
+ * list is everything with a future deadline anyway, and re-using it keeps the
+ * calendar exactly consistent with the inbox.
+ */
+function renderCalendar() {
+  const content = $('#content');
+  const monthStart = new Date(state.month);
+  const year = monthStart.getFullYear();
+  const month = monthStart.getMonth();
+
+  // Bucket every dated task by its local day.
+  const byDay = new Map();
+  for (const t of [...state.open, ...state.done]) {
+    if (t.due_at == null) continue;
+    const key = startOfDay(t.due_at);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(t);
+  }
+
+  // Monday-first grid. getDay() is Sunday-first, so shift it.
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = startOfDay(Date.now());
+
+  const cells = [];
+  // Leading blanks so the 1st lands under the right weekday.
+  for (let i = 0; i < firstWeekday; i += 1) cells.push(el('div', { class: 'cal-cell blank' }));
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const ts = new Date(year, month, day).getTime();
+    const tasks = byDay.get(ts) || [];
+    const open = tasks.filter((t) => t.status !== 'done');
+    const overdue = open.filter((t) => t.due_at < Date.now());
+
+    // At most three dots — beyond that the count matters more than the detail.
+    const dots = open.slice(0, 3).map((t) =>
+      el('i', { style: `background:${BUCKETS[t.bucket]?.color || 'var(--label-3)'}` }));
+
+    cells.push(el('button', {
+      class: ['cal-cell', ts === today ? 'today' : '', ts === state.selectedDay ? 'sel' : '',
+        overdue.length ? 'has-late' : ''].filter(Boolean).join(' '),
+      type: 'button',
+      onclick: () => { state.selectedDay = ts; render(); },
+    }, [
+      el('span', { class: 'd' }, String(day)),
+      el('div', { class: 'dots' }, dots),
+      open.length > 3 ? el('span', { class: 'more' }, `+${open.length - 3}`) : null,
+    ].filter(Boolean)));
+  }
+
+  const selTasks = (byDay.get(state.selectedDay) || [])
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+  content.replaceChildren(
+    el('div', { class: 'cal' }, [
+      el('div', { class: 'cal-head' }, [
+        el('button', { class: 'cal-nav', type: 'button', 'aria-label': 'Previous month',
+          onclick: () => { state.month = new Date(year, month - 1, 1).getTime(); render(); } },
+          icon('M15 5l-7 7 7 7', { size: 18, width: 2.2 })),
+        el('span', { class: 'cal-title' }, `${MONTHS[month]} ${year}`),
+        el('button', { class: 'cal-nav', type: 'button', 'aria-label': 'Next month',
+          onclick: () => { state.month = new Date(year, month + 1, 1).getTime(); render(); } },
+          icon('M9 5l7 7-7 7', { size: 18, width: 2.2 })),
+      ]),
+      el('div', { class: 'cal-week' }, WEEKDAYS.map((d) => el('span', {}, d))),
+      el('div', { class: 'cal-grid' }, cells),
+    ]),
+    el('div', { class: 'section-head' }, [
+      new Date(state.selectedDay).toLocaleDateString(undefined,
+        { weekday: 'long', day: 'numeric', month: 'long' }),
+      el('span', { class: 'count' }, String(selTasks.length)),
+    ]),
+    selTasks.length
+      ? el('div', { class: 'list' }, rowsOf(selTasks))
+      : emptyState('Nothing due', 'A clear day.', 'var(--blue), var(--teal)')
+  );
+  $('#list-footer').textContent = '';
+}
+
+/* ------------------------------------------------------------ people view */
+
+/**
+ * Who your work is coming from. The list first; tapping a person drills into
+ * just their tasks, which is the view you want before a conversation with them.
+ */
+function renderPeople() {
+  const content = $('#content');
+
+  // Drilled in: that person's open tasks.
+  if (state.person !== undefined) {
+    const who = state.person;
+    const tasks = state.open.filter((t) => (t.requester ?? null) === who);
+    content.replaceChildren(
+      el('button', { class: 'back', type: 'button', onclick: () => { state.person = undefined; render(); } },
+        [icon('M15 5l-7 7 7 7', { size: 16, width: 2.2 }), 'Everyone']),
+      el('div', { class: 'section-head' }, [
+        who || 'Unattributed',
+        el('span', { class: 'count' }, String(tasks.length)),
+      ]),
+      tasks.length
+        ? el('div', { class: 'list' }, rowsOf(tasks))
+        : emptyState('Nothing open', 'All clear with them.')
+    );
+    $('#list-footer').textContent = '';
+    return;
+  }
+
+  if (state.people.length === 0) {
+    content.replaceChildren(emptyState('No one yet', 'Tasks show who asked once you forward a few.'));
+    $('#list-footer').textContent = '';
+    return;
+  }
+
+  const rows = state.people.map((p, i) => {
+    const name = p.name || 'Unattributed';
+    const senior = p.rank === 'senior';
+    return el('div', { class: `cell person ${senior ? 'vip' : ''}`, style: `--i:${Math.min(i, MAX_STAGGER)}` }, [
+      el('button', { class: 'row', type: 'button', onclick: () => { state.person = p.name ?? null; render(); } }, [
+        // Initials rather than an avatar: there are no photos in this system,
+        // and a coloured monogram is more legible than a generic silhouette.
+        el('span', { class: 'mono', style: `--c:${colorForName(name)}` }, initials(name)),
+        el('div', { class: 'body' }, [
+          el('div', { class: 't' }, senior ? `★ ${name}` : name),
+          el('div', { class: 'sub' }, [
+            el('span', {}, `${p.count} open`),
+            p.waiting ? el('span', { class: 'sep' }, '·') : null,
+            p.waiting ? el('span', { class: 'wait' }, `${p.waiting} waiting`) : null,
+          ].filter(Boolean)),
+        ]),
+        el('span', { class: 'score', style: `--c:${BUCKETS[bucketOfScore(p.top_score)].color}` },
+          String(Math.round(p.top_score))),
+      ]),
+    ]);
+  });
+
+  content.replaceChildren(
+    el('div', { class: 'section-head' }, ['Who your work comes from',
+      el('span', { class: 'count' }, String(state.people.length))]),
+    el('div', { class: 'list' }, rows)
+  );
+  $('#list-footer').textContent = '';
+}
+
+/** Mirror of priority.js's bucketOf, for values the server sent us raw. */
+function bucketOfScore(score) {
+  if (score >= 70) return 'now';
+  if (score >= 45) return 'soon';
+  return 'later';
+}
+
+function initials(name) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+}
+
+/** A stable colour per person: hash the name, pick from the system palette. */
+function colorForName(name) {
+  const palette = ['--blue', '--indigo', '--purple', '--pink', '--teal', '--green', '--orange'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return `var(${palette[hash % palette.length]})`;
+}
+
+/* -------------------------------------------------------------- done view */
+
+function renderDone() {
+  const rows = state.done.slice(0, 50);
+  $('#content').replaceChildren(
+    rows.length ? el('div', { class: 'list' }, rowsOf(rows))
+      : emptyState('Nothing completed yet', 'Finished tasks collect here.')
+  );
+  $('#list-footer').textContent = state.done.length ? `${state.done.length} completed` : '';
+}
+
+/* ------------------------------------------------------------ search view */
+
+function renderSearch() {
+  const content = $('#content');
+  const q = state.search.trim();
+
+  if (q.length < 2) {
+    content.replaceChildren(emptyState('Search', 'Type at least two characters.', 'var(--blue), var(--indigo)'));
+    $('#list-footer').textContent = '';
+    return;
+  }
+  if (state.searchResults.length === 0) {
+    content.replaceChildren(emptyState('No matches', `Nothing for “${q}”.`, 'var(--label-3), var(--label-3)'));
+    $('#list-footer').textContent = '';
+    return;
+  }
+  content.replaceChildren(el('div', { class: 'list' }, rowsOf(state.searchResults)));
+  $('#list-footer').textContent = `${state.searchResults.length} result${state.searchResults.length === 1 ? '' : 's'}`;
+}
+
+/* --------------------------------------------------------------- dispatch */
+
+const TAB_TITLES = { inbox: 'Inbox', calendar: 'Calendar', people: 'People', done: 'Completed' };
+
 function render() {
-  $('#page-title').textContent = state.tab === 'done' ? 'Completed' : 'Inbox';
-  // The filter only applies to the inbox, so hide it on the Completed tab.
-  $('#seg').style.display = state.tab === 'done' ? 'none' : '';
+  const searching = state.search != null;
+  $('#page-title').textContent = searching ? 'Search' : TAB_TITLES[state.tab];
+  // The priority filter only makes sense on the inbox.
+  $('#seg').style.display = state.tab === 'inbox' && !searching ? '' : 'none';
+
   renderGreeting();
   renderHero(); // also sets the app's mood colours
-  renderSegments();
-  renderList();
+  if (!searching) renderSegments();
+
+  if (searching) renderSearch();
+  else if (state.tab === 'calendar') renderCalendar();
+  else if (state.tab === 'people') renderPeople();
+  else if (state.tab === 'done') renderDone();
+  else renderInbox();
 }
 
 let inFlight = false;
@@ -635,19 +1020,385 @@ async function refresh() {
   if (inFlight) return; // the timer, a tap and a tab focus can all fire at once
   inFlight = true;
   try {
-    const [open, done] = await Promise.all([api('/tasks?status=open'), api('/tasks?status=done')]);
+    const [open, done, game, people] = await Promise.all([
+      api('/tasks?status=open'),
+      api('/tasks?status=done'),
+      api('/game'),
+      api('/people'),
+    ]);
     done.sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0));
     state.open = open;
     state.done = done;
+    state.game = game;
+    state.people = people;
     render();
     $('#synced').textContent = `Updated ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-    toast('');
   } catch (err) {
     $('#synced').textContent = 'Not connected';
     toast(`Can’t reach the server: ${err.message}`);
   } finally {
     inFlight = false;
   }
+}
+
+/* ------------------------------------------------------- the detail sheet */
+
+/**
+ * The whole record for one task, editable in place, with the message it came
+ * from underneath. Opened by tapping a row.
+ *
+ * Every field writes straight through on change rather than waiting for a Save
+ * button: there is nothing here that needs to be committed atomically, and an
+ * unsaved-changes prompt is a worse experience than an instant one.
+ */
+async function openDetail(id) {
+  showSheet('#detail-sheet', true);
+  $('#detail-body').replaceChildren(el('div', { class: 'sheet-loading' }, 'Loading…'));
+
+  let task;
+  try {
+    task = await api(`/tasks/${id}`);
+  } catch (err) {
+    $('#detail-body').replaceChildren(el('p', { class: 'sheet-note' }, `Could not load: ${err.message}`));
+    return;
+  }
+
+  /** PATCH one field, then refresh the list behind the sheet. */
+  const save = async (fields, { reopen = false } = {}) => {
+    try {
+      await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+      refresh();
+      if (reopen) openDetail(id); // re-read when a change alters other fields
+    } catch (err) {
+      toast(`Could not save: ${err.message}`);
+    }
+  };
+
+  const cat = CATEGORY[task.category] || CATEGORY.other;
+  const rec = task.recurrence || {};
+
+  const body = el('div', {}, [
+    // --- title, edited in place. A textarea rather than an input so a long
+    //     title wraps instead of scrolling out of sight inside the field.
+    el('textarea', {
+      class: 'detail-title',
+      rows: 1,
+      value: task.title,
+      'aria-label': 'Task title',
+      // Enter commits rather than inserting a newline — a task title is one
+      // line by definition, and the browser would otherwise store the break.
+      onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } },
+      onchange: (e) => save({ title: e.target.value.replace(/\s+/g, ' ').trim() || task.title }),
+    }),
+
+    // --- the score, explained. The breakdown is the whole justification for
+    //     the ordering, so it belongs on the face of the sheet, not in a hover.
+    el('div', { class: 'detail-score', style: `--c:${BUCKETS[task.bucket].color}` }, [
+      el('span', { class: 'n' }, String(Math.round(task.score))),
+      el('span', { class: 'why' }, task.explanation),
+    ]),
+
+    task.dup_of ? el('div', { class: 'warn' }, [
+      `Looks like a duplicate of #${task.dup_of}. `,
+      el('button', { class: 'linkish', type: 'button', onclick: () => openDetail(task.dup_of) }, 'Open it'),
+      ' · ',
+      el('button', { class: 'linkish', type: 'button', onclick: () => save({ dup_of: null }, { reopen: true }) }, 'Not a duplicate'),
+    ]) : null,
+
+    // --- the editable fields
+    el('div', { class: 'group' }, [
+      field('Due', el('input', {
+        type: 'datetime-local',
+        value: toLocalInput(task.due_at),
+        // An empty value clears the deadline rather than being ignored.
+        onchange: (e) => save({
+          due_at: e.target.value ? new Date(e.target.value).getTime() : null,
+          due_text: e.target.value ? null : null,
+        }),
+      })),
+      field('Category', select(CATEGORY_KEYS, task.category || 'other', (v) => save({ category: v }))),
+      field('Asked by', el('input', {
+        type: 'text',
+        value: task.requester || '',
+        placeholder: 'Nobody',
+        // reopen: the rank (and therefore the score) may change with the name.
+        onchange: (e) => save({ requester: e.target.value.trim() || null }, { reopen: true }),
+      })),
+      field('Urgency', select(['1', '2', '3', '4', '5'], String(task.urgency), (v) => save({ urgency: Number(v) }, { reopen: true }))),
+      field('Importance', select(['1', '2', '3', '4', '5'], String(task.importance), (v) => save({ importance: Number(v) }, { reopen: true }))),
+      field('Effort', select(
+        ['0', '5', '15', '30', '60', '120', '240', '480'],
+        String(task.effort_minutes ?? 0),
+        (v) => save({ effort_minutes: Number(v) || null }, { reopen: true }),
+        (v) => (v === '0' ? 'unknown' : Number(v) < 60 ? `${v} min` : `${Number(v) / 60} hr`)
+      )),
+      // A toggle rather than a checkbox: it changes the score, so it deserves
+      // to look like a switch you are throwing.
+      field('Waiting on them', toggle(task.waiting_on, (on) => save({ waiting_on: on }, { reopen: true }))),
+    ]),
+
+    // --- recurrence
+    el('h3', { class: 'sheet-head' }, 'Repeat'),
+    el('div', { class: 'group' }, [
+      field('Every', select(
+        ['none', 'daily', 'weekly', 'monthly', 'yearly'],
+        rec.freq || 'none',
+        (v) => save({ recurrence: v === 'none' ? null : { freq: v, interval: rec.interval || 1, weekday: rec.weekday, monthday: rec.monthday } }, { reopen: true })
+      )),
+      rec.freq ? field('Interval', select(
+        ['1', '2', '3', '4', '6', '12'],
+        String(rec.interval || 1),
+        (v) => save({ recurrence: { ...rec, interval: Number(v) } }, { reopen: true }),
+        (v) => (v === '1' ? 'every one' : `every ${v}`)
+      )) : null,
+      rec.freq === 'weekly' ? field('On', select(
+        ['0', '1', '2', '3', '4', '5', '6'],
+        String(rec.weekday ?? new Date(task.due_at || Date.now()).getDay()),
+        (v) => save({ recurrence: { ...rec, weekday: Number(v) } }, { reopen: true }),
+        (v) => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][Number(v)]
+      )) : null,
+      task.repeat_text ? el('div', { class: 'line' }, [
+        el('span', { class: 'k' }, 'Summary'), el('span', { class: 'v' }, `🔁 ${task.repeat_text}`),
+      ]) : null,
+    ].filter(Boolean)),
+
+    // --- notes
+    el('h3', { class: 'sheet-head' }, 'Notes'),
+    el('textarea', {
+      class: 'detail-notes',
+      placeholder: 'Anything you want to remember about this…',
+      value: task.notes || '',
+      onchange: (e) => save({ notes: e.target.value.trim() || null }),
+    }),
+
+    // --- provenance
+    sourceBlock(task),
+
+    el('div', { class: 'detail-actions' }, [
+      el('button', { class: 'btn-primary', type: 'button', onclick: async () => {
+        closeAllSheets();
+        try {
+          const r = await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
+          if (r.game) state.game = r.game;
+          toast(`Done: ${task.title}`, { label: 'Undo', run: () => save({ status: 'open', completed_at: null }) });
+          refresh();
+        } catch (err) { toast(`Could not complete: ${err.message}`); }
+      } }, task.status === 'done' ? 'Completed' : 'Mark done'),
+      el('button', { class: 'btn-plain btn-danger', type: 'button', onclick: async () => {
+        closeAllSheets();
+        await save({ status: 'dropped' });
+        toast(`Dropped: ${task.title}`, { label: 'Undo', run: () => save({ status: 'open' }) });
+      } }, 'Drop this task'),
+      el('button', { class: 'btn-plain', type: 'button', onclick: closeAllSheets }, 'Close'),
+    ]),
+  ].filter(Boolean));
+
+  $('#detail-body').replaceChildren(body);
+}
+
+/** A labelled row inside a grouped list. */
+function field(label, control) {
+  return el('div', { class: 'line' }, [el('span', { class: 'k' }, label), control]);
+}
+
+/** A <select> that calls back with the chosen value. */
+function select(values, current, onChange, labelOf = (v) => v) {
+  return el('select', {
+    class: 'v',
+    onchange: (e) => onChange(e.target.value),
+  }, values.map((v) => el('option', { value: v, selected: v === current }, labelOf(v))));
+}
+
+/** An iOS-style switch. */
+function toggle(on, onChange) {
+  const input = el('input', { type: 'checkbox', checked: on, onchange: (e) => onChange(e.target.checked) });
+  return el('label', { class: 'switch' }, [input, el('span', { class: 'track' })]);
+}
+
+/**
+ * The message this task came from — the answer to "why do I have this?".
+ * Shows the transcript for a voice note and the photo for a screenshot, both
+ * labelled, so machine-heard text is never mistaken for something you typed.
+ */
+function sourceBlock(task) {
+  const src = task.source;
+  if (!src) {
+    return el('div', {}, [
+      el('h3', { class: 'sheet-head' }, 'Source'),
+      el('p', { class: 'sheet-note' }, 'Added by hand — no message behind this one.'),
+    ]);
+  }
+
+  const KINDS = { text: '💬 Forwarded message', photo: '🖼 Photo', voice: '🎤 Voice note' };
+
+  return el('div', {}, [
+    el('h3', { class: 'sheet-head' }, 'Source'),
+    el('div', { class: 'source' }, [
+      el('div', { class: 'source-head' }, [
+        el('span', {}, KINDS[src.kind] || KINDS.text),
+        src.origin_name ? el('span', { class: 'from' }, `from ${src.origin_name}`) : null,
+        src.sent_at ? el('span', { class: 'when' }, exactTime(src.sent_at)) : null,
+      ].filter(Boolean)),
+      src.has_image ? el('img', {
+        class: 'source-img',
+        src: `/api/messages/${src.id}/image`,
+        alt: 'The forwarded photo',
+        loading: 'lazy',
+      }) : null,
+      src.transcript
+        ? el('p', { class: 'source-text transcript' }, `“${src.transcript}”`)
+        : (src.text ? el('p', { class: 'source-text' }, src.text) : null),
+    ].filter(Boolean)),
+  ]);
+}
+
+/* -------------------------------------------------------- the stats sheet */
+
+/**
+ * The trophy cabinet: level, streak, lifetime totals, and a summary for any
+ * period you care to ask about.
+ */
+async function openStats() {
+  showSheet('#stats-sheet', true);
+  $('#stats-body').replaceChildren(el('div', { class: 'sheet-loading' }, 'Loading…'));
+
+  const g = state.game || await api('/game');
+
+  const periods = ['today', 'this week', 'last week', 'this month', 'last month', '30 days'];
+  let period = 'this week';
+
+  const summaryHost = el('div', { class: 'summary-host' });
+
+  const loadSummary = async () => {
+    summaryHost.replaceChildren(el('div', { class: 'sheet-loading' }, 'Counting…'));
+    try {
+      const s = await api(`/summary?period=${encodeURIComponent(period)}`);
+      summaryHost.replaceChildren(summaryView(s));
+    } catch (err) {
+      summaryHost.replaceChildren(el('p', { class: 'sheet-note' }, `Could not load: ${err.message}`));
+    }
+  };
+
+  $('#stats-body').replaceChildren(el('div', {}, [
+    el('h2', {}, 'Your progress'),
+
+    // The headline: level ring, streak, lifetime.
+    el('div', { class: 'stat-hero' }, [
+      ring(g.progress, { size: 92, stroke: 8, label: el('span', { class: 'lvl big' }, String(g.level)) }),
+      el('div', { class: 'stat-lines' }, [
+        el('div', { class: 'big' }, `${g.xp} XP`),
+        el('div', { class: 'muted' }, `${g.to_next} XP to level ${g.level + 1}`),
+        el('div', { class: 'flames' }, `🔥 ${g.streak}-day streak`),
+        el('div', { class: 'muted' }, `Best ${g.best_streak} · ${g.days_active} active days`),
+      ]),
+    ]),
+
+    el('div', { class: 'tiles' }, [
+      tile(String(g.lifetime_done), 'tasks done', 'var(--green)'),
+      tile(String(g.done_today), `of ${g.daily_goal} today`, 'var(--blue)'),
+      tile(String(g.best_streak), 'best streak', 'var(--orange)'),
+    ]),
+
+    el('h3', { class: 'sheet-head' }, 'Summary'),
+    // The period picker. Any of these, or a custom range below.
+    el('div', { class: 'chips picker' }, periods.map((p) =>
+      el('button', {
+        class: p === period ? 'on' : '',
+        type: 'button',
+        onclick: (e) => {
+          period = p;
+          for (const b of $$('.picker button', $('#stats-body'))) b.classList.remove('on');
+          e.target.classList.add('on');
+          loadSummary();
+        },
+      }, p))),
+
+    // An explicit range, for "how did March go?".
+    el('div', { class: 'range' }, [
+      el('input', { type: 'date', id: 'range-from', 'aria-label': 'From' }),
+      el('span', {}, 'to'),
+      el('input', { type: 'date', id: 'range-to', 'aria-label': 'To' }),
+      el('button', { class: 'btn-add', type: 'button', onclick: async () => {
+        const from = $('#range-from').value;
+        const to = $('#range-to').value;
+        if (!from || !to) return toast('Pick both dates.');
+        period = `${from}..${to}`;
+        for (const b of $$('.picker button', $('#stats-body'))) b.classList.remove('on');
+        loadSummary();
+      } }, 'Go'),
+    ]),
+
+    summaryHost,
+    el('button', { class: 'btn-plain', type: 'button', onclick: closeAllSheets }, 'Done'),
+  ]));
+
+  loadSummary();
+}
+
+function tile(n, label, color) {
+  return el('div', { class: 'tile', style: `--c:${color}` }, [
+    el('div', { class: 'n' }, n),
+    el('div', { class: 'k' }, label),
+  ]);
+}
+
+/** One rendered period summary. */
+function summaryView(s) {
+  const rows = [];
+
+  rows.push(el('div', { class: 'tiles' }, [
+    tile(String(s.completed), 'completed', 'var(--green)'),
+    tile(String(s.created), 'arrived', 'var(--blue)'),
+    tile(`${s.xp_earned}`, 'XP earned', 'var(--purple)'),
+  ]));
+
+  if (s.span_days > 1) {
+    rows.push(el('p', { class: 'sheet-note' },
+      `${s.per_day} a day over ${s.span_days} days · ${s.still_open} still open${s.still_overdue ? `, ${s.still_overdue} overdue` : ''}`));
+  }
+
+  if (s.by_category.length) {
+    // A stacked bar: the split by category, in one line, using each category's
+    // own colour so it matches the tiles on every row in the list.
+    const total = s.by_category.reduce((sum, c) => sum + c.n, 0);
+    rows.push(el('div', { class: 'bar' }, s.by_category.map((c) =>
+      el('i', {
+        style: `flex:${c.n};background:${(CATEGORY[c.key] || CATEGORY.other).color}`,
+        title: `${c.key}: ${c.n}`,
+      }))));
+    rows.push(el('div', { class: 'legend' }, s.by_category.map((c) =>
+      el('span', {}, [
+        el('i', { style: `background:${(CATEGORY[c.key] || CATEGORY.other).color}` }),
+        `${c.key} ${c.n}`,
+      ]))));
+    rows.push(el('p', { class: 'sheet-note' }, `${total} completed in total.`));
+  }
+
+  if (s.by_requester.length) {
+    rows.push(el('h3', { class: 'sheet-head' }, 'Most demanding'));
+    rows.push(el('div', { class: 'group' }, s.by_requester.map((r) =>
+      el('div', { class: 'line' }, [el('span', { class: 'k' }, r.key), el('span', { class: 'v' }, String(r.n))]))));
+  }
+
+  if (s.highlights.length) {
+    rows.push(el('h3', { class: 'sheet-head' }, 'Biggest wins'));
+    rows.push(el('div', { class: 'group' }, s.highlights.map((h) =>
+      el('div', { class: 'line' }, [
+        el('span', { class: 'k' }, h.title),
+        el('span', { class: 'v' }, String(Math.round(h.score))),
+      ]))));
+  }
+
+  if (s.worst_open) {
+    rows.push(el('div', { class: 'warn' },
+      `Longest overdue: ${s.worst_open.title} — ${shortDuration(Date.now() - s.worst_open.due_at)} late.`));
+  }
+
+  if (!s.completed && !s.created) {
+    rows.push(el('p', { class: 'sheet-note' }, 'Nothing happened in that window.'));
+  }
+
+  return el('div', {}, rows);
 }
 
 /* ------------------------------------------------------------ interactions */
@@ -672,6 +1423,8 @@ $('#tabbar').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   state.tab = btn.dataset.tab;
+  state.person = undefined; // leaving People resets the drill-down
+  closeSearch();
   for (const b of $$('#tabbar button')) b.classList.toggle('on', b === btn);
   scrollTo({ top: 0 });
   render();
@@ -679,6 +1432,43 @@ $('#tabbar').addEventListener('click', (e) => {
 
 // Re-measure the segmented thumb when the width changes.
 addEventListener('resize', moveThumb);
+
+/* -------------------------------------------------------------------- search */
+
+let searchTimer;
+function openSearch() {
+  state.search = '';
+  $('#searchbar').hidden = false;
+  $('#search-input').value = '';
+  $('#search-input').focus();
+  render();
+}
+function closeSearch() {
+  if (state.search == null) return;
+  state.search = null;
+  state.searchResults = [];
+  $('#searchbar').hidden = true;
+  render();
+}
+
+$('#search-btn').addEventListener('click', () => (state.search == null ? openSearch() : closeSearch()));
+$('#search-cancel').addEventListener('click', closeSearch);
+
+$('#search-input').addEventListener('input', (e) => {
+  state.search = e.target.value;
+  // Debounced: typing "deposit" should be one request, not seven.
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    const q = state.search.trim();
+    if (q.length < 2) { state.searchResults = []; return render(); }
+    try {
+      state.searchResults = await api(`/search?q=${encodeURIComponent(q)}`);
+    } catch {
+      state.searchResults = [];
+    }
+    render();
+  }, 220);
+});
 
 /* -------------------------------------------------------------------- theme */
 
@@ -705,14 +1495,17 @@ $('#theme').addEventListener('click', () => {
 });
 applyTheme(localStorage.getItem('theme') || 'system');
 
-/* ------------------------------------------------------------ compose sheet */
+/* ------------------------------------------------------------------ sheets */
 
-/** Show or hide one sheet. The backdrop is shared by both. */
+/** Show or hide one sheet. The backdrop is shared by all of them. */
+const SHEETS = ['#sheet', '#account-sheet', '#detail-sheet', '#stats-sheet'];
+
 function showSheet(id, on) {
   $(id).classList.toggle('on', on);
-  // The backdrop stays up while EITHER sheet is open.
-  const anyOpen = $('#sheet').classList.contains('on') || $('#account-sheet').classList.contains('on');
+  const anyOpen = SHEETS.some((s) => $(s).classList.contains('on'));
   $('#backdrop').classList.toggle('on', anyOpen);
+  // Stop the page behind a sheet from scrolling under it.
+  document.body.classList.toggle('locked', anyOpen);
 }
 
 function openSheet(on) {
@@ -722,8 +1515,10 @@ function openSheet(on) {
 }
 
 function closeAllSheets() {
-  openSheet(false);
-  showSheet('#account-sheet', false);
+  for (const s of SHEETS) $(s).classList.remove('on');
+  $('#backdrop').classList.remove('on');
+  document.body.classList.remove('locked');
+  $('#compose-text').value = '';
 }
 
 $('#compose-btn').addEventListener('click', () => openSheet(true));
@@ -734,10 +1529,12 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllSheets(); }
 
 /* ------------------------------------------------------------ account sheet */
 
-/** Load identity + Telegram status into the account sheet. */
+/** Load identity, Telegram status and preferences into the account sheet. */
 async function loadAccount() {
   try {
-    const me = await api('/me');
+    const [me, settings] = await Promise.all([api('/me'), api('/settings')]);
+    state.settings = settings;
+
     $('#acct-email').textContent = me.email;
     $('#acct-tg').textContent = me.tg_linked ? 'Linked' : 'Not linked';
     $('#acct-tg').classList.toggle('ok', me.tg_linked);
@@ -745,16 +1542,85 @@ async function loadAccount() {
     $('#link-btn').hidden = me.tg_linked;
     $('#unlink-btn').hidden = !me.tg_linked;
     if (me.tg_linked) $('#link-area').hidden = true;
+
+    renderSeniors();
+    renderSettings();
   } catch {
     // api() already redirects on 401; anything else is transient.
   }
+}
+
+/** Save one or more preferences and re-render what depends on them. */
+async function saveSettings(patch) {
+  try {
+    state.settings = await api('/settings', { method: 'PUT', body: JSON.stringify(patch) });
+    renderSeniors();
+    renderSettings();
+    // The senior list re-ranks existing tasks server-side, so the list behind
+    // the sheet is now out of date.
+    refresh();
+  } catch (err) {
+    toast(`Could not save: ${err.message}`);
+  }
+}
+
+function renderSeniors() {
+  const list = state.settings?.seniors ?? [];
+  $('#seniors-list').replaceChildren(
+    ...(list.length
+      ? list.map((name) => el('span', { class: 'chip vip' }, [
+          `★ ${name}`,
+          el('button', {
+            type: 'button',
+            'aria-label': `Remove ${name}`,
+            onclick: () => saveSettings({ seniors: list.filter((s) => s !== name) }),
+          }, '×'),
+        ]))
+      : [el('span', { class: 'chip muted' }, 'Nobody yet')])
+  );
+}
+
+function renderSettings() {
+  const s = state.settings;
+  if (!s) return;
+  $('#settings-group').replaceChildren(
+    field('Morning digest', toggle(s.digest_enabled, (on) => saveSettings({ digest_enabled: on }))),
+    field('Digest at', select(
+      [...Array(24).keys()].map(String), String(s.digest_hour),
+      (v) => saveSettings({ digest_hour: Number(v) }),
+      (v) => `${String(v).padStart(2, '0')}:00`
+    )),
+    field('Deadline nudge', toggle(s.nudge_enabled, (on) => saveSettings({ nudge_enabled: on }))),
+    field('Nudge me', select(
+      ['15', '30', '60', '120', '240'], String(s.nudge_lead_minutes),
+      (v) => saveSettings({ nudge_lead_minutes: Number(v) }),
+      (v) => (Number(v) < 60 ? `${v} min before` : `${Number(v) / 60} hr before`)
+    )),
+    field('Weekly review', toggle(s.weekly_enabled, (on) => saveSettings({ weekly_enabled: on }))),
+    field('Daily goal', select(
+      ['1', '2', '3', '5', '8', '10', '15'], String(s.daily_goal),
+      (v) => saveSettings({ daily_goal: Number(v) }),
+      (v) => `${v} tasks`
+    ))
+  );
 }
 
 $('#account-btn').addEventListener('click', () => {
   showSheet('#account-sheet', true);
   loadAccount();
 });
-$('#account-cancel').addEventListener('click', () => showSheet('#account-sheet', false));
+$('#account-cancel').addEventListener('click', closeAllSheets);
+
+$('#senior-add').addEventListener('click', () => {
+  const input = $('#senior-input');
+  const name = input.value.trim();
+  if (name.length < 2) return toast('Give at least two characters.');
+  saveSettings({ seniors: [...(state.settings?.seniors ?? []), name] });
+  input.value = '';
+});
+$('#senior-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('#senior-add').click();
+});
 
 $('#link-btn').addEventListener('click', async () => {
   const btn = $('#link-btn');

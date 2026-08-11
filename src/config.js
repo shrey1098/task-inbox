@@ -105,6 +105,28 @@ module.exports = {
     effort: process.env.ANTHROPIC_EFFORT || 'low',
   },
 
+  // Speech-to-text for forwarded voice notes. The Claude API takes text and
+  // images but not audio, so this is a separate provider — see transcribe.js.
+  // Leave the URL unset and voice notes are refused with an explanation;
+  // nothing else in the app changes.
+  transcribe: {
+    // Any OpenAI-compatible /audio/transcriptions endpoint — including a local
+    // whisper.cpp server on the Pi later.
+    url: process.env.TRANSCRIBE_URL || '',
+    key: process.env.TRANSCRIBE_KEY || '',
+    model: process.env.TRANSCRIBE_MODEL || 'whisper-1',
+    timeoutMs: int(process.env.TRANSCRIBE_TIMEOUT_MS, 120000),
+  },
+
+  // Largest photo we will download from Telegram and keep, in bytes. Telegram
+  // offers several sizes of each photo; the bot takes the biggest one under
+  // this cap, so a single screenshot cannot bloat the database or the request.
+  maxImageBytes: int(process.env.MAX_IMAGE_BYTES, 1500000),
+
+  // How often the scheduler wakes to check for digests and deadline nudges.
+  // A minute is fine: the checks are indexed queries and mostly find nothing.
+  schedulerIntervalMs: int(process.env.SCHEDULER_INTERVAL_MS, 60000),
+
   // IANA timezone (e.g. "Asia/Kolkata"). Passed to the model so it can turn
   // "by Friday" into a real timestamp in YOUR local time rather than UTC.
   timezone: process.env.TIMEZONE || 'UTC',

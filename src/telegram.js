@@ -16,9 +16,19 @@ const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
 const { explainScore } = require('./priority');
+const transcriber = require('./transcribe');
+const { periodSummary, gameStats, xpForTask } = require('./stats');
+const { parsePeriod, renderSummary, PERIOD_EXAMPLES } = require('./summary');
+const { describeRule, completeTask } = require('./recurrence');
 const { createLogger } = require('./log');
 
 const log = createLogger('telegram');
+
+/** A ten-cell text progress bar: ▓▓▓▓▓░░░░░ — readable in any Telegram font. */
+function progressBar(fraction, width = 10) {
+  const filled = Math.max(0, Math.min(width, Math.round(fraction * width)));
+  return '▓'.repeat(filled) + '░'.repeat(width - filled);
+}
 
 // Every Bot API call is <base>/bot<TOKEN>/<method>. The token is in the URL,
 // which is why it must never be logged or committed.
@@ -160,6 +170,60 @@ async function handleLink(chatId, arg) {
   await send(chatId, `✅ Linked to <b>${esc(user.email)}</b>. Forward me anything that needs doing.`);
 }
 
+/* ------------------------------------------------------------------ media */
+
+/**
+ * Download a file the bot has been sent.
+ *
+ * Two steps, which is how the Bot API works: getFile turns a file_id into a
+ * temporary path, then the file itself is fetched from a different host. The
+ * path expires after about an hour, which is exactly why anything we want to
+ * keep gets stored rather than re-fetched later.
+ */
+async function downloadFile(fileId) {
+  const file = await tg('getFile', { file_id: fileId });
+  const url = `https://api.telegram.org/file/bot${config.telegram.token}/${file.file_path}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
+  if (!res.ok) throw new Error(`file download failed: ${res.status}`);
+  // arrayBuffer → Buffer, because that is what base64 encoding and FormData
+  // both want.
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Pick which of Telegram's photo sizes to use.
+ *
+ * A photo arrives as several pre-scaled versions, smallest first. We want the
+ * largest one that is still under the size cap: bigger means more readable
+ * text in a screenshot, which is the whole point of reading photos, but an
+ * unbounded original would bloat both the database and the model request.
+ */
+function pickPhotoSize(sizes) {
+  const affordable = sizes.filter((s) => (s.file_size ?? 0) <= config.maxImageBytes);
+  // If every size is over the cap, fall back to the smallest rather than
+  // refusing outright — a slightly-too-big photo is still worth reading.
+  const pool = affordable.length > 0 ? affordable : [sizes[0]];
+  return pool.reduce((best, s) => ((s.file_size ?? 0) > (best.file_size ?? 0) ? s : best));
+}
+
+/**
+ * Turn a photo message into base64 image blocks for the extractor.
+ * Returns null when the download fails, so the caller can fall back to the
+ * caption rather than losing the message entirely.
+ */
+async function imagesFromMessage(msg) {
+  if (!msg.photo || msg.photo.length === 0) return null;
+  try {
+    const size = pickPhotoSize(msg.photo);
+    const buffer = await downloadFile(size.file_id);
+    // Telegram re-encodes photos as JPEG, so the media type is not a guess.
+    return [{ media_type: 'image/jpeg', data: buffer.toString('base64') }];
+  } catch (err) {
+    log.error('photo download failed:', err.message);
+    return null;
+  }
+}
+
 /**
  * Work out who originally wrote a forwarded message.
  *
@@ -199,18 +263,116 @@ async function handleCommand(chatId, user, text) {
         chatId,
         [
           'Forward me any WhatsApp message that needs action and I will file it as a task.',
+          'Text, screenshots and voice notes all work.',
           '',
-          '<b>Commands</b>',
+          '<b>Your list</b>',
           '/tasks — top open tasks',
           '/today — tasks due in the next 24h (plus overdue)',
+          '/waiting — things you are chasing someone else for',
+          '/people — who your open work is coming from',
+          '',
+          '<b>Acting</b>',
           '/done N — mark task N done',
           '/drop N — dismiss task N (not a real task)',
           '/snooze N — hide task N until tomorrow morning',
+          '',
+          '<b>Looking back</b>',
+          '/summary [period] — e.g. <code>/summary last month</code>, <code>/summary 7d</code>',
+          '/streak — level, XP and current streak',
+          '',
+          '<b>Setup</b>',
+          '/seniors — list who outranks the clock',
+          '/seniors add CO — their asks are always top priority',
+          '/seniors remove CO',
           '/whoami — which account this chat is linked to',
           '/unlink — disconnect this chat from your account',
         ].join('\n')
       );
       return;
+
+    case '/waiting': {
+      const tasks = (await dbModule.listTasksByStatus(user.id, 'open')).filter((t) => t.waiting_on);
+      if (tasks.length === 0) return void (await send(chatId, 'Not waiting on anybody. 🎉'));
+      const lines = tasks.map(
+        (t) => `⏳ <b>#${t.id}</b> ${esc(t.title)}${t.requester ? ` — <i>${esc(t.requester)}</i>` : ''}`
+      );
+      await send(chatId, ['<b>Waiting on others</b>', ...lines].join('\n'));
+      return;
+    }
+
+    case '/people': {
+      const groups = await dbModule.groupByRequester(user.id);
+      if (groups.length === 0) return void (await send(chatId, 'No open tasks.'));
+      const lines = groups.map((g) => {
+        const who = g._id || 'Unattributed';
+        const star = g.rank === 'senior' ? '⭐️ ' : '';
+        const waiting = g.waiting ? ` · ${g.waiting} waiting` : '';
+        return `${star}<b>${esc(who)}</b> — ${g.n} open${waiting}`;
+      });
+      await send(chatId, ['<b>Who your work comes from</b>', ...lines].join('\n'));
+      return;
+    }
+
+    case '/summary': {
+      const period = parsePeriod(arg);
+      if (!period) {
+        await send(
+          chatId,
+          `Try: ${PERIOD_EXAMPLES.map((e) => `<code>${esc(e)}</code>`).join(', ')}`
+        );
+        return;
+      }
+      const data = await periodSummary(dbModule, user.id, period.from, period.to);
+      await send(chatId, renderSummary(data, period.label));
+      return;
+    }
+
+    case '/streak': {
+      const g = await gameStats(dbModule, user.id);
+      const bar = progressBar(g.progress);
+      await send(
+        chatId,
+        [
+          `🎮 <b>Level ${g.level}</b> — ${g.xp} XP`,
+          `${bar} ${g.to_next} XP to level ${g.level + 1}`,
+          '',
+          `🔥 Streak: <b>${g.streak} day${g.streak === 1 ? '' : 's'}</b> (best ${g.best_streak})`,
+          `✅ Today: ${g.done_today}/${g.daily_goal}`,
+          `📦 Lifetime: ${g.lifetime_done} tasks`,
+        ].join('\n')
+      );
+      return;
+    }
+
+    case '/seniors': {
+      const settings = dbModule.settingsOf(user);
+      const [action, ...nameParts] = arg.split(/\s+/);
+      const name = nameParts.join(' ').trim();
+
+      if (action === 'add' && name) {
+        // Case-insensitive dedupe, so "CO" and "co" don't both end up stored.
+        const exists = settings.seniors.some((s) => s.toLowerCase() === name.toLowerCase());
+        const seniors = exists ? settings.seniors : [...settings.seniors, name];
+        await dbModule.updateUser(user.id, { settings: { ...settings, seniors } });
+        await send(chatId, `⭐️ <b>${esc(name)}</b>’s requests will now always rank as Now.`);
+        return;
+      }
+      if ((action === 'remove' || action === 'rm') && name) {
+        const seniors = settings.seniors.filter((s) => s.toLowerCase() !== name.toLowerCase());
+        await dbModule.updateUser(user.id, { settings: { ...settings, seniors } });
+        await send(chatId, `Removed <b>${esc(name)}</b>.`);
+        return;
+      }
+
+      await send(
+        chatId,
+        settings.seniors.length
+          ? ['<b>Always top priority</b>', ...settings.seniors.map((s) => `⭐️ ${esc(s)}`),
+             '', 'Add with <code>/seniors add NAME</code>.'].join('\n')
+          : 'Nobody set yet. Add one with <code>/seniors add CO</code> — their requests will always rank as Now, whatever the deadline says.'
+      );
+      return;
+    }
 
     case '/tasks': {
       // Already sorted by score in the database; cap at 10 so the reply stays
@@ -253,8 +415,17 @@ async function handleCommand(chatId, user, text) {
       if (!task) return void (await send(chatId, `No task #${id}.`));
 
       if (cmd === '/done') {
-        await dbModule.updateTaskFields(user.id, id, { status: 'done', completed_at: Date.now() });
-        await send(chatId, `✅ Done: ${esc(task.title)}`);
+        // The shared path, so a recurring chore comes back whether you tick it
+        // off here or in the dashboard.
+        const { next } = await completeTask(dbModule, user.id, task);
+        const g = await gameStats(dbModule, user.id);
+        const again = next
+          ? `\n🔁 Next one: <b>#${next.id}</b> ${esc(new Date(next.due_at).toDateString())}`
+          : '';
+        await send(
+          chatId,
+          `✅ Done: ${esc(task.title)}\n⚡ +${xpForTask(task)} XP · 🔥 ${g.streak}-day streak${again}`
+        );
       } else if (cmd === '/drop') {
         // 'dropped' rather than deleted: the task stays for auditing what the
         // extractor got wrong.
@@ -308,19 +479,68 @@ async function handleMessage(msg) {
     return;
   }
 
-  if (!text) {
-    await send(chatId, 'I can only read text right now — media without a caption is skipped.');
+  if (text && text.startsWith('/')) return handleCommand(chatId, user, text);
+
+  // --- media. Both branches end up producing ordinary message text, so the
+  //     extraction path below does not need to know how it arrived.
+  let kind = 'text';
+  let images = null;
+  let transcript = null;
+  let body = text;
+
+  if (msg.photo) {
+    kind = 'photo';
+    // Reading a screenshot takes a moment; say so rather than going quiet.
+    await send(chatId, '🖼 Reading that image…');
+    images = await imagesFromMessage(msg);
+    if (!images) {
+      await send(chatId, '⚠️ Could not download that image. Try sending it again.');
+      return;
+    }
+    // The caption is context, not the whole story — the extractor is told to
+    // read the picture too.
+    body = text || '';
+  } else if (msg.voice || msg.audio) {
+    kind = 'voice';
+    const audio = msg.voice || msg.audio;
+
+    if (!transcriber.isConfigured()) {
+      await send(
+        chatId,
+        '🎤 I can’t transcribe voice notes — no speech-to-text service is configured.\n\n' +
+          'Set <code>TRANSCRIBE_URL</code> on the server (any OpenAI-compatible ' +
+          '/audio/transcriptions endpoint, including a local whisper server), or just type the task.'
+      );
+      return;
+    }
+
+    await send(chatId, '🎤 Listening…');
+    try {
+      const buffer = await downloadFile(audio.file_id);
+      transcript = await transcriber.transcribe(buffer, audio.file_name || 'voice.ogg');
+      body = transcript;
+      log.info(`transcribed ${Math.round((audio.duration ?? 0))}s of audio for #${user.id}`);
+    } catch (err) {
+      await send(chatId, `⚠️ Could not transcribe that (${esc(err.message)}).`);
+      return;
+    }
+  } else if (!text) {
+    await send(
+      chatId,
+      'I can read text, photos and voice notes. That message had none of those.'
+    );
     return;
   }
-
-  if (text.startsWith('/')) return handleCommand(chatId, user, text);
 
   const origin = describeOrigin(msg);
   const stored = await dbModule.insertMessage({
     user_id: user.id,
     tg_chat_id: chatId,
     tg_message_id: msg.message_id,
-    text,
+    text: body,
+    kind,
+    images,
+    transcript,
     origin_name: origin.name,
     origin_chat: origin.chat,
     // Telegram timestamps are in SECONDS; JavaScript works in milliseconds.
@@ -337,10 +557,10 @@ async function handleMessage(msg) {
   }
 
   // Collapse whitespace and truncate so one log line stays one line.
-  const preview = text.replace(/\s+/g, ' ').slice(0, 70);
+  const preview = (body || `(${kind})`).replace(/\s+/g, ' ').slice(0, 70);
   log.info(
-    `message #${stored.id} for #${user.id} from ${origin.name || 'them'}: ` +
-      `"${preview}${text.length > 70 ? '…' : ''}"`
+    `message #${stored.id} (${kind}) for #${user.id} from ${origin.name || 'them'}: ` +
+      `"${preview}${(body || '').length > 70 ? '…' : ''}"`
   );
 
   // The API round trip — the slow step, a few seconds.
@@ -360,10 +580,22 @@ async function handleMessage(msg) {
   } else if (tasks.length === 0) {
     await send(chatId, `No task found${note ? ` — ${esc(note)}` : ''}. Saved for reference.`);
   } else {
-    // Include the score breakdown so a bad judgement is visible immediately.
-    const lines = tasks.map(
-      (t) => `📌 <b>#${t.id}</b> ${esc(t.title)}\n<i>${esc(explainScore(t))} → score ${Math.round(t.score)}</i>`
-    );
+    // Include the score breakdown so a bad judgement is visible immediately,
+    // plus flags for the things that change how a task behaves.
+    const lines = tasks.map((t) => {
+      const flags = [
+        t.requester_rank === 'senior' ? '⭐️ from a senior — pinned to Now' : null,
+        t.recurrence ? `🔁 ${esc(describeRule(t.recurrence))}` : null,
+        t.waiting_on ? '⏳ waiting on someone else' : null,
+        t.dup_of ? `♻️ looks like #${t.dup_of} — check before doing both` : null,
+      ].filter(Boolean);
+
+      return [
+        `📌 <b>#${t.id}</b> ${esc(t.title)}`,
+        `<i>${esc(explainScore(t))} → score ${Math.round(t.score)}</i>`,
+        ...flags,
+      ].join('\n');
+    });
     await send(chatId, lines.join('\n\n'));
   }
 }
@@ -429,4 +661,6 @@ async function runBot() {
   }
 }
 
-module.exports = { runBot };
+// `send` is exported for the scheduler, which needs to push messages without
+// owning a poll loop of its own.
+module.exports = { runBot, send };

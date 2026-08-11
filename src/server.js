@@ -14,7 +14,10 @@ const express = require('express');
 const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
-const { bucketOf, explainScore, rescoreOpenTasks, scoreTask } = require('./priority');
+const { bucketOf, explainScore, rescoreOpenTasks, scoreTask, rankRequester } = require('./priority');
+const { describeRule, normaliseRule, completeTask } = require('./recurrence');
+const { gameStats, periodSummary, xpForTask } = require('./stats');
+const { parsePeriod } = require('./summary');
 const auth = require('./auth');
 const { createLogger, colorize, dim } = require('./log');
 
@@ -167,16 +170,124 @@ function createApp() {
     // same "now" and the list can't be internally inconsistent.
     const now = Date.now();
 
-    // Derived fields are computed here rather than stored, because they depend
-    // on the current time — a stored `overdue` flag would go stale immediately.
+    res.json(tasks.map((t) => decorate(t, now)));
+  });
+
+  // GET /api/tasks/:id — the detail sheet: one task plus the message it came
+  // from, so "why do I have this?" is always answerable.
+  api.get('/tasks/:id', async (req, res) => {
+    const task = await dbModule.getTask(req.user.id, Number(req.params.id));
+    if (!task) return res.status(404).json({ error: 'not found' });
+
+    // The message is fetched by id alone (it has no tenant filter of its own),
+    // so it is checked against the task's owner before being returned.
+    let message = task.message_id != null ? await dbModule.getMessage(task.message_id) : null;
+    if (message && message.user_id !== req.user.id) message = null;
+
+    res.json({
+      ...decorate(task, Date.now()),
+      // Only the fields the UI shows. `images` in particular is megabytes of
+      // base64 and is served separately, on demand.
+      source: message
+        ? {
+            id: message.id,
+            kind: message.kind || 'text',
+            text: message.text,
+            transcript: message.transcript || null,
+            origin_name: message.origin_name,
+            origin_chat: message.origin_chat,
+            sent_at: message.sent_at,
+            received_at: message.received_at,
+            has_image: Array.isArray(message.images) && message.images.length > 0,
+          }
+        : null,
+    });
+  });
+
+  // GET /api/messages/:id/image — the forwarded photo itself.
+  // Served as bytes rather than inlined into the JSON above so the detail sheet
+  // stays small and the browser can cache the image normally.
+  api.get('/messages/:id/image', async (req, res) => {
+    const message = await dbModule.getMessage(Number(req.params.id));
+    // The ownership check is the point of this route existing separately.
+    if (!message || message.user_id !== req.user.id) return res.status(404).end();
+    const image = message.images?.[0];
+    if (!image) return res.status(404).end();
+
+    res.set('content-type', image.media_type);
+    // private: it is one user's forwarded message, so no shared cache may keep
+    // it. immutable: a stored image never changes.
+    res.set('cache-control', 'private, max-age=86400, immutable');
+    res.send(Buffer.from(image.data, 'base64'));
+  });
+
+  // GET /api/search?q=deposit — the search field.
+  api.get('/search', async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    // Two characters minimum: one character matches most of the list and makes
+    // the results useless rather than helpful.
+    if (q.length < 2) return res.json([]);
+    const tasks = await dbModule.searchTasks(req.user.id, q);
+    const now = Date.now();
+    res.json(tasks.map((t) => decorate(t, now)));
+  });
+
+  // GET /api/calendar?from=…&to=… — tasks with deadlines in a window.
+  api.get('/calendar', async (req, res) => {
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+      return res.status(400).json({ error: 'from and to (epoch ms) required' });
+    }
+    // A year is the widest window worth serving in one request; beyond that the
+    // caller should page by month like the UI does.
+    if (to - from > 400 * 86400e3) return res.status(400).json({ error: 'range too wide' });
+
+    const tasks = await dbModule.listTasksDueBetween(req.user.id, from, to, ['open', 'snoozed', 'done']);
+    const now = Date.now();
+    res.json(tasks.map((t) => decorate(t, now)));
+  });
+
+  // GET /api/people — open work grouped by who asked for it.
+  api.get('/people', async (req, res) => {
+    const groups = await dbModule.groupByRequester(req.user.id);
+    const seniors = dbModule.settingsOf(req.user).seniors;
     res.json(
-      tasks.map((t) => ({
-        ...withoutMongoId(t),
-        bucket: bucketOf(t.score),          // which column it belongs in
-        explanation: explainScore(t, now),  // hover text on the score meter
-        overdue: t.due_at != null && t.due_at < now && t.status === 'open',
+      groups.map((g) => ({
+        name: g._id,                        // null = nobody identified
+        count: g.n,
+        waiting: g.waiting,
+        top_score: g.top_score,
+        // Recomputed from the current senior list rather than trusting the
+        // stored rank, so editing the list updates the view immediately.
+        rank: g._id ? rankRequester(g._id, seniors) : 'unknown',
       }))
     );
+  });
+
+  // GET /api/game — level, XP, streak, today's progress.
+  api.get('/game', async (req, res) => {
+    res.json(await gameStats(dbModule, req.user.id));
+  });
+
+  // GET /api/summary?period=last+month  or  ?from=…&to=…
+  // One endpoint for the presets and for an arbitrary range, because they are
+  // the same question asked two ways.
+  api.get('/summary', async (req, res) => {
+    let from = Number(req.query.from);
+    let to = Number(req.query.to);
+    let label = 'custom range';
+
+    if (!Number.isFinite(from) || !Number.isFinite(to)) {
+      const period = parsePeriod(req.query.period || 'this week');
+      if (!period) return res.status(400).json({ error: 'unrecognised period' });
+      ({ from, to } = period);
+      label = period.label;
+    }
+    if (to <= from) return res.status(400).json({ error: 'to must be after from' });
+
+    const data = await periodSummary(dbModule, req.user.id, from, to);
+    res.json({ ...data, label });
   });
 
   // GET /api/stats — counts per status, for the stat tiles.
@@ -228,10 +339,39 @@ function createApp() {
 
     const fields = { ...req.body }; // copy so we don't mutate the request body
 
-    // Server-side consequences of a status change. Doing this here rather than
-    // in the browser means the Telegram bot and any curl call get it too.
-    if (fields.status === 'done' && task.status !== 'done') fields.completed_at = Date.now();
+    // Completing goes through the shared path, which also spawns the next
+    // occurrence of a recurring task. Doing it here rather than in the browser
+    // means the bot and any curl call behave identically.
+    if (fields.status === 'done' && task.status !== 'done') {
+      const { task: done, next } = await completeTask(dbModule, req.user.id, task);
+      return res.json({
+        ...decorate(done, Date.now()),
+        // The UI announces both: "+18 XP" and "next one is on the 18th".
+        next_occurrence: next ? decorate(next, Date.now()) : null,
+        game: await gameStats(dbModule, req.user.id),
+      });
+    }
+
     if (fields.status === 'open') fields.snooze_until = null;
+
+    // --- an edit rather than a status change.
+    // A recurrence rule arriving from the browser is normalised before storage,
+    // so a hand-crafted PATCH cannot put a nonsense rule into the database and
+    // have the scheduler trip over it later.
+    if ('recurrence' in fields) {
+      fields.recurrence = normaliseRule(fields.recurrence);
+      fields.recurrence_text = fields.recurrence ? describeRule(fields.recurrence) : null;
+    }
+    // Re-rank the requester whenever it changes, so retyping a name as "CO"
+    // immediately applies the authority rule.
+    if ('requester' in fields) {
+      fields.requester_rank = rankRequester(fields.requester, dbModule.settingsOf(req.user).seniors);
+    }
+    // Mark human edits, so the UI can show "edited" and the extractor's
+    // judgement is never silently credited with a correction you made.
+    const EDIT_FIELDS = ['title', 'details', 'due_at', 'category', 'requester',
+      'urgency', 'importance', 'effort_minutes', 'notes', 'recurrence', 'waiting_on'];
+    if (EDIT_FIELDS.some((f) => f in fields)) fields.edited_at = Date.now();
 
     // db.updateTaskFields ignores any field not on its allowlist, so a
     // malicious PATCH cannot rewrite `id` or `message_id`.
@@ -240,7 +380,83 @@ function createApp() {
     // has to be recomputed from the post-update document.
     updated = await dbModule.updateTaskFields(req.user.id, id, { score: scoreTask(updated) });
 
-    res.json(withoutMongoId(updated));
+    res.json(decorate(updated, Date.now()));
+  });
+
+  // POST /api/tasks — a task typed straight in, with no message behind it and
+  // no model call. The compose box sends prose to /messages; this is the edit
+  // sheet's "add manually", where you already know what you want.
+  api.post('/tasks', async (req, res) => {
+    const title = String(req.body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'title required' });
+
+    const recurrence = normaliseRule(req.body.recurrence);
+    const requester = req.body.requester ? String(req.body.requester).trim() : null;
+    const spec = {
+      title: title.slice(0, 500),
+      details: req.body.details ? String(req.body.details).slice(0, 4000) : null,
+      requester,
+      requester_rank: rankRequester(requester, dbModule.settingsOf(req.user).seniors),
+      category: req.body.category || 'other',
+      due_at: Number.isFinite(Number(req.body.due_at)) ? Number(req.body.due_at) : null,
+      due_text: req.body.due_text || (recurrence ? describeRule(recurrence) : null),
+      urgency: clampInt(req.body.urgency, 1, 5, 3),
+      importance: clampInt(req.body.importance, 1, 5, 3),
+      effort_minutes: Number.isFinite(Number(req.body.effort_minutes))
+        ? Number(req.body.effort_minutes) : null,
+      waiting_on: Boolean(req.body.waiting_on),
+      recurrence,
+      recurrence_text: recurrence ? describeRule(recurrence) : null,
+      extractor: 'manual',
+    };
+    spec.score = scoreTask(spec);
+
+    // messageId null: this task has no message behind it, which the detail
+    // sheet handles by simply not showing a source section.
+    const [created] = await dbModule.insertTasks(req.user.id, null, [spec]);
+    res.status(201).json(decorate(created, Date.now()));
+  });
+
+  /* ----------------------------------------------------------- preferences */
+
+  api.get('/settings', async (req, res) => {
+    res.json(dbModule.settingsOf(req.user));
+  });
+
+  /**
+   * Merge in changed preferences. Each field is validated rather than trusted:
+   * these values drive a scheduler loop, and a digest_hour of 900 or a seniors
+   * list of ten thousand strings would be a self-inflicted denial of service.
+   */
+  api.put('/settings', async (req, res) => {
+    const current = dbModule.settingsOf(req.user);
+    const body = req.body || {};
+    const next = { ...current };
+
+    if (Array.isArray(body.seniors)) {
+      next.seniors = body.seniors
+        .map((s) => String(s).trim().slice(0, 60))
+        .filter((s) => s.length >= 2)  // a single character would match everyone
+        .slice(0, 25);
+    }
+    for (const flag of ['digest_enabled', 'nudge_enabled', 'weekly_enabled']) {
+      if (flag in body) next[flag] = Boolean(body[flag]);
+    }
+    if ('digest_hour' in body) next.digest_hour = clampInt(body.digest_hour, 0, 23, current.digest_hour);
+    if ('weekly_hour' in body) next.weekly_hour = clampInt(body.weekly_hour, 0, 23, current.weekly_hour);
+    if ('weekly_weekday' in body) next.weekly_weekday = clampInt(body.weekly_weekday, 0, 6, current.weekly_weekday);
+    if ('nudge_lead_minutes' in body) {
+      next.nudge_lead_minutes = clampInt(body.nudge_lead_minutes, 5, 1440, current.nudge_lead_minutes);
+    }
+    if ('daily_goal' in body) next.daily_goal = clampInt(body.daily_goal, 1, 50, current.daily_goal);
+
+    await dbModule.updateUser(req.user.id, { settings: next });
+
+    // Changing the senior list re-ranks existing work, or the rule would only
+    // apply to tasks that happen to arrive after you set it up.
+    if (Array.isArray(body.seniors)) await rerankRequesters(req.user.id, next.seniors);
+
+    res.json(next);
   });
 
   // DELETE /api/tasks/:id — permanent removal (the UI prefers 'dropped').
@@ -286,6 +502,52 @@ function createApp() {
 function withoutMongoId(doc) {
   const { _id, ...rest } = doc;
   return rest;
+}
+
+/** Parse an integer and force it into a range, falling back when unusable. */
+function clampInt(value, lo, hi, fallback) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/**
+ * Re-rank every open task after the senior list changes, and rescore the ones
+ * whose rank actually moved.
+ *
+ * Without this, marking someone senior would only affect tasks that arrive
+ * afterwards — the twenty things they already asked for would stay buried,
+ * which is precisely the situation the feature exists to fix.
+ */
+async function rerankRequesters(userId, seniors) {
+  const open = await dbModule.listTasksByStatus(userId, 'open');
+  for (const task of open) {
+    const rank = rankRequester(task.requester, seniors);
+    if (rank === task.requester_rank) continue; // nothing moved for this one
+    const updated = await dbModule.updateTaskFields(userId, task.id, { requester_rank: rank });
+    await dbModule.updateTaskFields(userId, task.id, { score: scoreTask(updated) });
+  }
+}
+
+/**
+ * Add the fields the browser needs but the database does not store, because
+ * they depend on the current time or on logic that lives in Node.
+ *
+ * A stored `overdue` flag would be wrong within the hour; a stored bucket would
+ * be wrong as soon as the score moved. Computing them per response, from one
+ * shared `now`, keeps every task in a list judged against the same instant.
+ */
+function decorate(task, now) {
+  return {
+    ...withoutMongoId(task),
+    bucket: bucketOf(task.score),          // which section it belongs in
+    explanation: explainScore(task, now),  // the breakdown behind the score
+    overdue: task.due_at != null && task.due_at < now && task.status === 'open',
+    // How late, in ms — the UI escalates its treatment as this grows.
+    overdue_by: task.due_at != null && task.due_at < now ? now - task.due_at : 0,
+    repeat_text: task.recurrence ? describeRule(task.recurrence) : null,
+    xp: xpForTask(task),
+  };
 }
 
 /** Every non-loopback IPv4 address, so we can print URLs that work from a phone. */

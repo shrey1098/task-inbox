@@ -63,19 +63,88 @@ previously pinned Telegram chat over to it. It is safe to run twice.
 ## Daily use
 
 - In WhatsApp: long-press a message → **Forward** → your Telegram bot. (Telegram's "forwarded from" header, when present, is used as the requester.)
+- **Text, screenshots and voice notes all work.** A photo is read for the text in it; a voice note is transcribed first (see below).
 - The bot replies with what it filed and why it scored the task the way it did.
-- Bot commands: `/tasks`, `/today`, `/done N`, `/snooze N`, `/drop N`.
 - The dashboard has a capture box too, so you can file tasks without Telegram.
+- Tap any task to open it: edit every field, add notes, set a repeat, and read the original message it came from.
+
+### Bot commands
+
+| Command | What it does |
+| --- | --- |
+| `/tasks` | Top open tasks |
+| `/today` | Due in the next 24h, plus overdue |
+| `/waiting` | Things you are chasing somebody else for |
+| `/people` | Who your open work is coming from |
+| `/done N`, `/snooze N`, `/drop N` | Act on task N |
+| `/summary [period]` | `today`, `last week`, `30 days`, `2026-08-01..2026-08-11`… |
+| `/streak` | Level, XP, current streak |
+| `/seniors [add\|remove NAME]` | Who outranks the clock |
+
+### What the bot sends you unprompted
+
+- **Morning digest** at your chosen hour: streak, anything overdue, the top five.
+- **Deadline nudge** shortly before something is due (once per task).
+- **Weekly review** on Sunday evening.
+
+All three are per-account and switchable in the dashboard's Account sheet. The
+scheduler ticks once a minute and records what it has sent in the database, so
+a restart never double-sends (`src/scheduler.js`).
+
+### Voice notes
+
+The Claude API takes text and images but not audio, so voice notes need a
+speech-to-text service. Point `TRANSCRIBE_URL` at any OpenAI-compatible
+`/audio/transcriptions` endpoint — OpenAI's, or a local `whisper.cpp` server,
+which is the plan for the Pi. Leave it unset and voice notes are refused with
+an explanation; nothing else changes.
 
 ## How prioritisation works
 
-Claude only judges the *content*: urgency (1–5), importance (1–5), effort, deadline. The 0–100 score is computed locally and re-computed every 5 minutes:
+Claude only judges the *content*: urgency (1–5), importance (1–5), effort, deadline, and whether you are waiting on somebody else. The 0–100 score is computed locally and re-computed every 5 minutes:
 
 - urgency → up to 30 pts, importance → up to 30 pts
 - deadline pressure → up to 30 pts (overdue = max; grows as the deadline nears)
 - quick-win bonus (≤15 min) and a small staleness nudge so old tasks resurface
+- **authority**: +18 pts and a **floor of 70** for anyone on your seniors list
+- **waiting on someone**: −12 pts, and the authority floor does not apply — you cannot finish those by working harder
 
 Because scoring is local, ranks stay explainable, deadlines "heat up" without extra API calls, and you can tune the weights in `src/priority.js`.
+
+### The seniors list
+
+Add a name (`CO`, `Col. Mehta`) in the Account sheet or with `/seniors add CO`.
+Anything they ask for is pinned to **Now** regardless of its timeline, and the
+tasks they already asked for are re-ranked immediately — not just future ones.
+Matching is case-insensitive and works on partial names in both directions, so
+`CO` also catches "the CO".
+
+## Recurring tasks
+
+Say "every Tuesday" or "monthly" in the message and the extractor picks it up;
+you can also set a repeat by hand in a task's detail sheet. Only **one
+occurrence exists at a time** — completing it creates the next. That keeps the
+list free of fifty future copies, and skipping a cycle does not leave a pile of
+overdue ghosts. The date arithmetic lives in `src/recurrence.js`, including the
+January-31st-to-February case, which has a test.
+
+## The game layer
+
+Every completed task is worth XP scaled to its priority score, so clearing the
+hard thing beats cherry-picking the easy ones. XP drives a level; consecutive
+days with at least one completion drive a streak. None of it is stored — it is
+all derived from your completed tasks, so there is no counter to drift out of
+sync and nothing to migrate when the formula changes (`src/stats.js`).
+
+A day you have not finished anything *yet* does not break the streak; only a
+missed day does.
+
+## Other views
+
+- **Calendar** — the same tasks laid out by deadline, a month at a time. Days with something overdue are tinted red.
+- **People** — open work grouped by who asked for it, seniors starred. Tap someone to see just their tasks before you talk to them.
+- **Search** — partial-word matching across titles, details, requesters and notes.
+- **Stats** — level, streak, lifetime totals, and a summary for any period you pick, including an arbitrary date range.
 
 ## Ops notes
 

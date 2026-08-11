@@ -69,6 +69,13 @@ async function connect() {
   // user_id leads the compound index because every task query filters on it.
   await db.collection('tasks').createIndex({ user_id: 1, status: 1, score: -1 });
   await db.collection('tasks').createIndex({ id: 1 }, { unique: true });
+  // Serves the calendar and the deadline nudger, which both ask "what is due
+  // between these two timestamps".
+  await db.collection('tasks').createIndex({ user_id: 1, due_at: 1 });
+  // Serves period summaries and the streak calculation.
+  await db.collection('tasks').createIndex({ user_id: 1, completed_at: -1 });
+  // Serves the People view, which groups open work by who asked for it.
+  await db.collection('tasks').createIndex({ user_id: 1, requester: 1 });
   await db.collection('state').createIndex({ key: 1 }, { unique: true });
 
   await db.collection('users').createIndex({ email: 1 }, { unique: true });
@@ -154,6 +161,17 @@ async function insertMessage(msg) {
     tg_chat_id: msg.tg_chat_id ?? null,
     tg_message_id: msg.tg_message_id ?? null,
     text: msg.text,
+    // 'text' | 'photo' | 'voice'. Kept so the UI can label where a task came
+    // from, and so a failed extraction can be retried with the same input.
+    kind: msg.kind ?? 'text',
+    // Base64 image blocks for a forwarded photo: [{ media_type, data }].
+    // Stored rather than re-fetched because Telegram's file links expire, and
+    // "show me the original" has to keep working a month later.
+    images: msg.images ?? null,
+    // For a voice note: what the transcriber heard. `text` holds the same words
+    // (that is what gets extracted); this marks them as machine-transcribed, so
+    // the UI can show them as "heard:" rather than as something you typed.
+    transcript: msg.transcript ?? null,
     origin_name: msg.origin_name ?? null, // who originally wrote it, if forwarded
     origin_chat: msg.origin_chat ?? null,
     sent_at: msg.sent_at ?? null,         // when it was originally sent
@@ -208,6 +226,9 @@ async function insertTasks(userId, messageId, tasks) {
       title: t.title,
       details: t.details ?? null,
       requester: t.requester ?? null,
+      // 'senior' | 'peer' | 'self' | 'unknown'. Drives the authority boost in
+      // priority.js — a senior's request outranks its own timeline.
+      requester_rank: t.requester_rank ?? 'unknown',
       category: t.category ?? null,
       due_at: t.due_at ?? null,     // epoch milliseconds, or null
       due_text: t.due_text ?? null, // the original wording, e.g. "by Friday"
@@ -217,6 +238,20 @@ async function insertTasks(userId, messageId, tasks) {
       score: t.score ?? 0,          // 0-100, computed locally in priority.js
       status: 'open',               // open | done | snoozed | dropped
       snooze_until: null,
+      // A rule object like { freq:'weekly', interval:1, weekday:2 }, or null.
+      // recurrence.js turns it into the next occurrence when this one is ticked.
+      recurrence: t.recurrence ?? null,
+      recurrence_text: t.recurrence_text ?? null, // "every Tuesday", as written
+      parent_task_id: t.parent_task_id ?? null,   // set on a spawned occurrence
+      // True when the user is blocked on somebody else rather than on doing
+      // the work — these are chased, not completed.
+      waiting_on: t.waiting_on ?? false,
+      // Set when this looks like a task the user already has. Not auto-merged:
+      // the row is shown with a "possible duplicate" marker to dismiss or keep.
+      dup_of: t.dup_of ?? null,
+      notes: null,                    // the user's own notes, added by editing
+      nudged_at: null,                // when the deadline nudge was sent
+      edited_at: null,                // set when a human changes the extraction
       extractor: t.extractor ?? null, // which model produced this
       created_at: now,
       updated_at: now,
@@ -262,9 +297,14 @@ function listTasksByStatusAllUsers(status) {
  */
 async function updateTaskFields(userId, id, fields) {
   const allowed = [
-    'title', 'details', 'requester', 'category',
+    'title', 'details', 'requester', 'requester_rank', 'category',
     'due_at', 'due_text', 'urgency', 'importance', 'effort_minutes',
     'status', 'snooze_until', 'completed_at', 'score',
+    // Editing and the newer features. Still an allowlist: `id`, `user_id`,
+    // `message_id` and `created_at` are deliberately absent, so no PATCH can
+    // reassign a task to another account or rewrite its provenance.
+    'recurrence', 'recurrence_text', 'waiting_on', 'dup_of', 'notes',
+    'nudged_at', 'edited_at',
   ];
 
   const $set = { updated_at: Date.now() };
@@ -302,6 +342,133 @@ async function countByStatus(userId) {
   return rows.map((r) => ({ status: r._id, n: r.n }));
 }
 
+/* --------------------------------------------------- search and time ranges */
+
+/**
+ * Escape a user's search string so it is matched literally.
+ *
+ * Without this, typing "(" or "*" would either throw or turn the query into a
+ * different pattern — and a pathological pattern like "(a+)+b" is a denial of
+ * service against our own event loop. The character class is every regex
+ * metacharacter.
+ */
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Full-text-ish search across the fields a person would actually search by.
+ *
+ * A regex scan rather than a Mongo text index: it matches partial words (typing
+ * "depos" finds "deposit", which a text index would not), and at a few thousand
+ * tasks per account the difference in speed is not measurable.
+ */
+function searchTasks(userId, query, { limit = 50 } = {}) {
+  const rx = new RegExp(escapeRegex(query), 'i');
+  return db.collection('tasks')
+    .find({
+      user_id: userId,
+      // $or across the human-readable fields; anything matching one counts.
+      $or: [{ title: rx }, { details: rx }, { requester: rx }, { notes: rx }, { due_text: rx }],
+    })
+    .sort({ score: -1, id: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+/** Open tasks with a deadline inside [from, to) — the calendar and the nudger. */
+function listTasksDueBetween(userId, from, to, statuses = ['open', 'snoozed']) {
+  return db.collection('tasks')
+    .find({ user_id: userId, status: { $in: statuses }, due_at: { $gte: from, $lt: to } })
+    .sort({ due_at: 1 })
+    .toArray();
+}
+
+/** Tasks completed inside [from, to) — period summaries and streaks. */
+function listTasksCompletedBetween(userId, from, to) {
+  return db.collection('tasks')
+    .find({ user_id: userId, status: 'done', completed_at: { $gte: from, $lt: to } })
+    .sort({ completed_at: 1 })
+    .toArray();
+}
+
+/** Tasks created inside [from, to) — "what came in" half of a summary. */
+function listTasksCreatedBetween(userId, from, to) {
+  return db.collection('tasks')
+    .find({ user_id: userId, created_at: { $gte: from, $lt: to } })
+    .sort({ created_at: 1 })
+    .toArray();
+}
+
+/** Every completed_at for one account, ascending — the streak calculation. */
+async function completionTimes(userId) {
+  const rows = await db.collection('tasks')
+    .find({ user_id: userId, status: 'done', completed_at: { $ne: null } })
+    .project({ completed_at: 1, score: 1, _id: 0 })
+    .sort({ completed_at: 1 })
+    .toArray();
+  return rows;
+}
+
+/**
+ * Open work grouped by who asked for it, busiest first.
+ *
+ * Done in an aggregation rather than in Node because the grouping and the
+ * max-score-per-person are exactly what the database is good at, and it avoids
+ * loading every task to build a handful of rows.
+ */
+async function groupByRequester(userId) {
+  return db.collection('tasks').aggregate([
+    { $match: { user_id: userId, status: { $in: ['open', 'snoozed'] } } },
+    {
+      $group: {
+        // A missing requester groups under null rather than being dropped.
+        _id: { $ifNull: ['$requester', null] },
+        n: { $sum: 1 },
+        top_score: { $max: '$score' },
+        rank: { $first: '$requester_rank' },
+        // $cond counts conditionally: 1 when overdue-ish, 0 otherwise.
+        waiting: { $sum: { $cond: ['$waiting_on', 1, 0] } },
+      },
+    },
+    { $sort: { top_score: -1, n: -1 } },
+  ]).toArray();
+}
+
+/** Recent open tasks, lightweight — what duplicate detection compares against. */
+function recentOpenTaskSummaries(userId, limit = 60) {
+  return db.collection('tasks')
+    .find({ user_id: userId, status: { $in: ['open', 'snoozed'] } })
+    .project({ id: 1, title: 1, requester: 1, due_at: 1, _id: 0 })
+    .sort({ id: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+/**
+ * The last few messages from one chat, newest first — the context window that
+ * lets three rapid-fire messages be read as one thought rather than three.
+ */
+function recentMessagesForChat(userId, chatId, since, limit = 5) {
+  return db.collection('messages')
+    .find({ user_id: userId, tg_chat_id: chatId, received_at: { $gte: since } })
+    .project({ id: 1, text: 1, origin_name: 1, received_at: 1, _id: 0 })
+    .sort({ id: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+/** Open tasks across all accounts that have a deadline — the nudge scan. */
+function listNudgeCandidates(now, horizon) {
+  return db.collection('tasks')
+    .find({
+      status: 'open',
+      nudged_at: null, // nudge each task at most once
+      due_at: { $gt: now, $lte: horizon },
+    })
+    .toArray();
+}
+
 // ---------- users ----------
 
 /** Create an account. Throws on a duplicate email (unique index, code 11000). */
@@ -313,10 +480,42 @@ async function createUser({ email, password_hash }) {
     tg_chat_id: null,      // set when they link Telegram
     link_code: null,       // the one-time code used to do that
     link_code_expires: null,
+    settings: { ...DEFAULT_SETTINGS },
     created_at: Date.now(),
   };
   await db.collection('users').insertOne(doc);
   return doc;
+}
+
+/**
+ * Per-user preferences, with the defaults applied.
+ *
+ * Read through this rather than off the document directly: accounts created
+ * before a setting existed simply do not have the key, and every caller would
+ * otherwise need its own fallback.
+ */
+const DEFAULT_SETTINGS = {
+  // Names/titles that outrank the clock. Matched case-insensitively against a
+  // task's requester, so "CO" also catches "the CO" and "Col. Mehta" catches
+  // "Col. Mehta (Ops)".
+  seniors: [],
+  digest_enabled: true,
+  digest_hour: 8,            // local hour for the morning digest
+  nudge_enabled: true,
+  nudge_lead_minutes: 60,    // how long before a deadline to ping
+  weekly_enabled: true,
+  weekly_weekday: 0,         // 0 = Sunday
+  weekly_hour: 18,
+  daily_goal: 5,             // tasks per day — the target the ring fills toward
+};
+
+function settingsOf(user) {
+  return { ...DEFAULT_SETTINGS, ...(user?.settings || {}) };
+}
+
+/** Every account with a linked Telegram chat — the scheduler's audience. */
+function listUsersWithChat() {
+  return db.collection('users').find({ tg_chat_id: { $ne: null } }).toArray();
 }
 
 const getUser = (id) => db.collection('users').findOne({ id });
@@ -371,4 +570,16 @@ module.exports = {
   updateTaskScore,
   deleteTask,
   countByStatus,
+  DEFAULT_SETTINGS,
+  settingsOf,
+  listUsersWithChat,
+  searchTasks,
+  listTasksDueBetween,
+  listTasksCompletedBetween,
+  listTasksCreatedBetween,
+  completionTimes,
+  groupByRequester,
+  recentOpenTaskSummaries,
+  recentMessagesForChat,
+  listNudgeCandidates,
 };
