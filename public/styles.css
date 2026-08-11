@@ -951,15 +951,24 @@ body.locked { overflow: hidden; }
 
 /* -------------------------------------------------------------- detail sheet */
 
-.detail-title {
+/* `.sheet textarea` above is more specific than a lone class, so the title
+   needs to name both to win — without this it inherits the compose box's grey
+   fill, padding and 96px min-height, and every short title sits in an empty
+   grey slab. */
+.sheet textarea.detail-title {
   width: 100%; border: 0; background: none; color: var(--label);
   font: inherit; font-size: 22px; font-weight: 680; letter-spacing: -.02em;
   padding: 4px 0 8px; line-height: 1.25;
-  /* Grows with its content in browsers that support it; the min-height keeps
-     two lines visible everywhere else rather than clipping to one. */
-  resize: none; overflow: hidden; field-sizing: content; min-height: 2.5em;
+  /* field-sizing lets the box grow and shrink with its content, so a one-line
+     title is one line high. Where it is unsupported the rows="2" attribute
+     sizes it instead — no min-height, which was leaving a 96px empty box under
+     every short title. */
+  resize: none; overflow: hidden; field-sizing: content;
+  /* Explicitly zero, not merely omitted: winning on specificity does not undo
+     a property this rule never mentions, and the base rule sets 96px. */
+  min-height: 0;
 }
-.detail-title:focus { outline: none; border-bottom: 2px solid var(--tint); }
+.sheet textarea.detail-title:focus { outline: none; border-bottom: 2px solid var(--tint); }
 
 /* The score and the sentence explaining it, side by side — the justification
    for the ordering belongs on the face of the sheet, not in a hover. */
@@ -1008,6 +1017,55 @@ body.locked { overflow: hidden; }
   display: block; width: 100%; max-height: 340px; object-fit: contain;
   border-radius: 8px; margin-bottom: 10px; background: var(--bg-tint);
 }
+
+/* ------------------------------------------------------------ progress log */
+
+/* A count beside a section heading, e.g. "PROGRESS  3 steps". */
+.sheet-head .head-n {
+  margin-left: 8px; font-weight: 500; letter-spacing: 0;
+  text-transform: none; color: var(--label-3);
+}
+
+/* The steps, as a numbered timeline. The connecting line is drawn on the list
+   rather than per item, so it runs continuously behind the numbers instead of
+   breaking at every gap. */
+.steps {
+  list-style: none; margin: 0 0 12px; padding: 0 0 0 4px;
+  position: relative;
+}
+.steps::before {
+  content: ""; position: absolute; left: 15px; top: 12px; bottom: 12px;
+  width: 2px; background: var(--bg-tint-2); border-radius: 1px;
+}
+.steps li {
+  display: flex; align-items: flex-start; gap: 11px;
+  padding: 7px 0; position: relative;
+}
+/* The number sits on top of the line, with a ring of page colour so the line
+   appears to pass behind it. */
+.steps .n {
+  flex: none; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--green); color: #fff;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 3px var(--bg-cell);
+  position: relative; z-index: 1;
+}
+.steps .body { flex: 1; min-width: 0; }
+.steps .t { font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.steps .when { font-size: 11.5px; color: var(--label-3); margin-top: 2px; }
+/* Faint until the row is hovered: removing a step is a correction, not a
+   normal action, and it should not compete with reading the log. */
+.steps .x {
+  flex: none; color: var(--label-3); font-size: 17px; line-height: 1;
+  padding: 2px 4px; opacity: 0; transition: opacity .15s var(--ease);
+}
+.steps li:hover .x, .steps .x:focus-visible { opacity: 1; }
+/* Touch devices have no hover, so there the button is simply always visible. */
+@media (hover: none) { .steps .x { opacity: .5; } }
+
+/* The step count on a list row. */
+.row .sub .steps-n { color: var(--green); font-weight: 600; }
 
 /* --------------------------------------------------------------- stats sheet */
 

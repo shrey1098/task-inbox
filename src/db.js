@@ -250,6 +250,11 @@ async function insertTasks(userId, messageId, tasks) {
       // the row is shown with a "possible duplicate" marker to dismiss or keep.
       dup_of: t.dup_of ?? null,
       notes: null,                    // the user's own notes, added by editing
+      // The progress log: [{ id, at, text, source }], oldest first. A task is
+      // often several steps long, and "not done" is a poor summary of one you
+      // have half finished — this is where that middle ground is recorded.
+      progress: [],
+      progress_at: null,              // when the last step was logged
       nudged_at: null,                // when the deadline nudge was sent
       edited_at: null,                // set when a human changes the extraction
       extractor: t.extractor ?? null, // which model produced this
@@ -305,6 +310,8 @@ async function updateTaskFields(userId, id, fields) {
     // reassign a task to another account or rewrite its provenance.
     'recurrence', 'recurrence_text', 'waiting_on', 'dup_of', 'notes',
     'nudged_at', 'edited_at',
+    // Not 'progress': the log is append-only through addProgress/deleteProgress
+    // rather than replaceable wholesale, so a PATCH cannot rewrite history.
   ];
 
   const $set = { updated_at: Date.now() };
@@ -340,6 +347,57 @@ async function countByStatus(userId) {
     .toArray();
   // Rename Mongo's _id (which holds the grouped value) to something readable.
   return rows.map((r) => ({ status: r._id, n: r.n }));
+}
+
+/* ---------------------------------------------------------- progress log */
+
+/** How many steps one task keeps. Old entries fall off the front. */
+const MAX_PROGRESS = 100;
+
+/**
+ * Append a step to a task's progress log.
+ *
+ * Read-then-write rather than a bare $push, because the entry needs an id that
+ * is unique within the task and Mongo cannot compute one for us. At one entry
+ * per few minutes the race window is theoretical; if two writes ever did land
+ * together the worst case is two entries sharing an id, which affects nothing
+ * but deleting one of them.
+ *
+ * $slice on the push caps the array, so a task somebody logs against every day
+ * for a year cannot grow the document without bound.
+ */
+async function addProgress(userId, id, text) {
+  const task = await getTask(userId, id);
+  if (!task) return null;
+
+  const entries = task.progress || [];
+  const entry = {
+    // Highest existing id plus one, so ids keep rising even after deletions.
+    id: entries.reduce((max, e) => Math.max(max, e.id || 0), 0) + 1,
+    at: Date.now(),
+    text,
+  };
+
+  const res = await db.collection('tasks').findOneAndUpdate(
+    { id, user_id: userId },
+    {
+      $push: { progress: { $each: [entry], $slice: -MAX_PROGRESS } },
+      $set: { progress_at: entry.at, updated_at: entry.at },
+    },
+    { returnDocument: 'after' }
+  );
+  return res;
+}
+
+/** Remove one step. Used for the inevitable typo, not for hiding history. */
+async function deleteProgress(userId, id, entryId) {
+  const res = await db.collection('tasks').findOneAndUpdate(
+    { id, user_id: userId },
+    // $pull removes every array element matching the condition.
+    { $pull: { progress: { id: entryId } }, $set: { updated_at: Date.now() } },
+    { returnDocument: 'after' }
+  );
+  return res;
 }
 
 /* --------------------------------------------------- search and time ranges */
@@ -573,6 +631,9 @@ module.exports = {
   DEFAULT_SETTINGS,
   settingsOf,
   listUsersWithChat,
+  addProgress,
+  deleteProgress,
+  MAX_PROGRESS,
   searchTasks,
   listTasksDueBetween,
   listTasksCompletedBetween,

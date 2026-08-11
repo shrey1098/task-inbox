@@ -581,6 +581,12 @@ function taskRow(task) {
     sub.push(el('span', { class: `who ${senior ? 'vip' : ''}` }, senior ? `★ ${task.requester}` : task.requester));
   }
   if (task.repeat_text) sub.push(el('span', { class: 'rep' }, `🔁 ${task.repeat_text}`));
+  // Steps in progress are worth seeing without opening the task: a half-done
+  // job looks identical to an untouched one otherwise.
+  if (task.progress_count) {
+    sub.push(el('span', { class: 'steps-n' },
+      `▸ ${task.progress_count} step${task.progress_count === 1 ? '' : 's'}`));
+  }
   if (task.waiting_on) sub.push(el('span', { class: 'wait' }, 'waiting'));
 
   // Interleave "·" separators between whatever pieces exist.
@@ -1118,7 +1124,8 @@ async function openDetail(id) {
     //     title wraps instead of scrolling out of sight inside the field.
     el('textarea', {
       class: 'detail-title',
-      rows: 1,
+      // Only a fallback: field-sizing:content overrides it where supported.
+      rows: 2,
       value: task.title,
       'aria-label': 'Task title',
       // Enter commits rather than inserting a newline — a task title is one
@@ -1198,6 +1205,9 @@ async function openDetail(id) {
       ]) : null,
     ].filter(Boolean)),
 
+    // --- the progress log
+    progressBlock(task, id, save),
+
     // --- notes
     el('h3', { class: 'sheet-head' }, 'Notes'),
     el('textarea', {
@@ -1249,6 +1259,83 @@ function select(values, current, onChange, labelOf = (v) => v) {
 function toggle(on, onChange) {
   const input = el('input', { type: 'checkbox', checked: on, onchange: (e) => onChange(e.target.checked) });
   return el('label', { class: 'switch' }, [input, el('span', { class: 'track' })]);
+}
+
+/**
+ * The progress log: the steps already done, and a box to add the next one.
+ *
+ * Most real tasks are not one action. "Not done" is a poor summary of one you
+ * have half finished, and a week later the useful question is not "is it done"
+ * but "where had I got to?" — which only a log can answer.
+ *
+ * Steps are numbered oldest-first, so it reads as the story of the task rather
+ * than as a notification feed.
+ */
+function progressBlock(task, id, save) {
+  const steps = task.progress || [];
+
+  const addStep = async (input) => {
+    const text = input.value.trim();
+    if (!text) return;
+    input.disabled = true;
+    try {
+      await api(`/tasks/${id}/progress`, { method: 'POST', body: JSON.stringify({ text }) });
+      input.value = '';
+      refresh();
+      openDetail(id); // re-read so the new step appears in the list
+    } catch (err) {
+      toast(`Could not log that: ${err.message}`);
+    } finally {
+      input.disabled = false;
+    }
+  };
+
+  const removeStep = async (entryId) => {
+    try {
+      await api(`/tasks/${id}/progress/${entryId}`, { method: 'DELETE' });
+      refresh();
+      openDetail(id);
+    } catch (err) {
+      toast(`Could not remove that: ${err.message}`);
+    }
+  };
+
+  const input = el('input', {
+    type: 'text',
+    placeholder: 'What did you just do?',
+    'aria-label': 'Add a step',
+    // Enter submits — this is a field you use repeatedly, and reaching for a
+    // button every time would be the slow path.
+    onkeydown: (e) => { if (e.key === 'Enter') addStep(e.target); },
+  });
+
+  return el('div', {}, [
+    el('h3', { class: 'sheet-head' }, [
+      'Progress',
+      steps.length ? el('span', { class: 'head-n' }, `${steps.length} step${steps.length === 1 ? '' : 's'}`) : null,
+    ].filter(Boolean)),
+
+    steps.length
+      ? el('ol', { class: 'steps' }, steps.map((e, i) => el('li', {}, [
+          el('span', { class: 'n' }, String(i + 1)),
+          el('div', { class: 'body' }, [
+            el('div', { class: 't' }, e.text),
+            el('div', { class: 'when', title: exactTime(e.at) }, `${relative(e.at)} · ${exactTime(e.at)}`),
+          ]),
+          el('button', {
+            class: 'x',
+            type: 'button',
+            'aria-label': 'Remove this step',
+            onclick: () => removeStep(e.id),
+          }, '×'),
+        ])))
+      : el('p', { class: 'sheet-note' }, 'No steps yet. Log what you have done so far and the task keeps its history.'),
+
+    el('div', { class: 'add-row' }, [
+      input,
+      el('button', { class: 'btn-add', type: 'button', onclick: () => addStep(input) }, 'Log'),
+    ]),
+  ]);
 }
 
 /**

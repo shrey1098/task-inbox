@@ -77,6 +77,8 @@ previously pinned Telegram chat over to it. It is safe to run twice.
 | `/waiting` | Things you are chasing somebody else for |
 | `/people` | Who your open work is coming from |
 | `/done N`, `/snooze N`, `/drop N` | Act on task N |
+| `/progress N` | The steps logged on task N so far |
+| `/progress N did the thing` | Log another step |
 | `/summary [period]` | `today`, `last week`, `30 days`, `2026-08-01..2026-08-11`… |
 | `/streak` | Level, XP, current streak |
 | `/seniors [add\|remove NAME]` | Who outranks the clock |
@@ -127,6 +129,22 @@ occurrence exists at a time** — completing it creates the next. That keeps the
 list free of fifty future copies, and skipping a cycle does not leave a pile of
 overdue ghosts. The date arithmetic lives in `src/recurrence.js`, including the
 January-31st-to-February case, which has a test.
+
+## Progress on multi-step tasks
+
+Most real tasks are not one action, and "not done" is a poor summary of one you
+have half finished. Every task carries a **progress log**: timestamped steps you
+write yourself, numbered oldest-first so it reads as the story of the task.
+
+- Add one in the task's detail sheet, or with `/progress 7 rang the bank`.
+- A row in the list shows `▸ 3 steps`, so a half-done job does not look
+  identical to an untouched one.
+- A week later the useful question is not "is it done" but **"where had I got
+  to?"** — which is exactly what the log answers.
+
+The log is append-only through its own endpoints, and `progress` is deliberately
+absent from the PATCH allowlist, so an ordinary task edit cannot rewrite
+history. Each task keeps its last 100 steps.
 
 ## The game layer
 

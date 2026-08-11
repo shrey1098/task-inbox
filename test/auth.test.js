@@ -58,10 +58,20 @@ const fakeDb = {
   listTasksByStatus: async (uid, st) => tasks.filter((t) => t.user_id === uid && t.status === st).sort((a, b) => b.score - a.score),
   listAllTasks: async (uid) => tasks.filter((t) => t.user_id === uid),
   listTasksByStatusAllUsers: async (st) => tasks.filter((t) => t.status === st),
+  // Mirrors the allowlist in db.js. Without it the double would happily write
+  // any field the real database refuses, and the tests that exist to prove the
+  // allowlist works would pass for the wrong reason.
   updateTaskFields: async (uid, id, f) => {
+    const allowed = ['title', 'details', 'requester', 'requester_rank', 'category',
+      'due_at', 'due_text', 'urgency', 'importance', 'effort_minutes',
+      'status', 'snooze_until', 'completed_at', 'score',
+      'recurrence', 'recurrence_text', 'waiting_on', 'dup_of', 'notes',
+      'nudged_at', 'edited_at'];
     const t = tasks.find((x) => x.id === id && x.user_id === uid);
     if (!t) return null;
-    Object.assign(t, f, { updated_at: Date.now() }); return t;
+    for (const [k, v] of Object.entries(f)) if (allowed.includes(k)) t[k] = v;
+    t.updated_at = Date.now();
+    return t;
   },
   updateTaskScore: async (id, sc) => { const t = tasks.find((x) => x.id === id); if (t) t.score = sc; },
   deleteTask: async (uid, id) => { const i = tasks.findIndex((t) => t.id === id && t.user_id === uid); if (i < 0) return false; tasks.splice(i, 1); return true; },
@@ -98,6 +108,20 @@ const fakeDb = {
     .map((t) => ({ id: t.id, title: t.title, requester: t.requester, due_at: t.due_at })),
   recentMessagesForChat: async () => [],
   listNudgeCandidates: async () => [],
+  addProgress: async (uid, id, text) => {
+    const t = tasks.find((x) => x.id === id && x.user_id === uid);
+    if (!t) return null;
+    t.progress = t.progress || [];
+    t.progress.push({ id: t.progress.reduce((m, e) => Math.max(m, e.id), 0) + 1, at: Date.now(), text });
+    t.progress_at = Date.now();
+    return t;
+  },
+  deleteProgress: async (uid, id, entryId) => {
+    const t = tasks.find((x) => x.id === id && x.user_id === uid);
+    if (!t) return null;
+    t.progress = (t.progress || []).filter((e) => e.id !== entryId);
+    return t;
+  },
 };
 
 const dbPath = require.resolve(path.join(ROOT, 'db.js'));
@@ -435,6 +459,68 @@ async function check(name, fn) {
   await check('one account cannot read another’s message image', async () => {
     const r = await bob('/api/messages/1/image');
     assert.strictEqual(r.status, 404);
+  });
+
+  await check('steps can be logged against a task and read back', async () => {
+    const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Multi-step job' }) });
+    const id = t.body.id;
+
+    const first = await alice(`/api/tasks/${id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'Rang the bank' }) });
+    assert.strictEqual(first.status, 201, `got ${first.status}`);
+    assert.strictEqual(first.body.progress_count, 1);
+
+    await alice(`/api/tasks/${id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'Got the reference number' }) });
+
+    const read = await alice(`/api/tasks/${id}`);
+    assert.strictEqual(read.body.progress.length, 2);
+    // Oldest first — the log reads as the story of the task.
+    assert.strictEqual(read.body.progress[0].text, 'Rang the bank');
+    assert.ok(read.body.progress[0].at > 0, 'each step is timestamped');
+    // The task is still open: progress is not completion.
+    assert.strictEqual(read.body.status, 'open');
+  });
+
+  await check('a step can be removed', async () => {
+    const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Typo job' }) });
+    const added = await alice(`/api/tasks/${t.body.id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'Teh wrong thing' }) });
+    const entryId = added.body.progress[0].id;
+
+    const after = await alice(`/api/tasks/${t.body.id}/progress/${entryId}`, { method: 'DELETE' });
+    assert.strictEqual(after.body.progress.length, 0);
+  });
+
+  await check('an empty or oversized step is rejected', async () => {
+    const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Guarded' }) });
+    const blank = await alice(`/api/tasks/${t.body.id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: '   ' }) });
+    assert.strictEqual(blank.status, 400);
+    const huge = await alice(`/api/tasks/${t.body.id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'x'.repeat(1001) }) });
+    assert.strictEqual(huge.status, 400);
+  });
+
+  await check('one account cannot log progress on another’s task', async () => {
+    const mine = await alice('/api/tasks?status=open');
+    const id = mine.body[0].id;
+    const attempt = await bob(`/api/tasks/${id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'sneaking in' }) });
+    assert.strictEqual(attempt.status, 404);
+  });
+
+  await check('a PATCH cannot rewrite the progress log', async () => {
+    const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'History' }) });
+    await alice(`/api/tasks/${t.body.id}/progress`, { method: 'POST',
+      body: JSON.stringify({ text: 'genuine step' }) });
+    // `progress` is deliberately absent from the PATCH allowlist.
+    await alice(`/api/tasks/${t.body.id}`, { method: 'PATCH',
+      body: JSON.stringify({ progress: [{ id: 99, at: 0, text: 'fabricated' }] }) });
+
+    const read = await alice(`/api/tasks/${t.body.id}`);
+    assert.strictEqual(read.body.progress.length, 1);
+    assert.strictEqual(read.body.progress[0].text, 'genuine step');
   });
 
   server.close();

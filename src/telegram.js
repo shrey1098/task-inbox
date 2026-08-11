@@ -42,6 +42,13 @@ function bandOf(task) {
   return `${BAND_DOT[band] || '⚪️'} <b>${band.toUpperCase()}</b>`;
 }
 
+/** A short absolute date-time for a log entry: "Tue 11 Aug, 14:05". */
+function whenText(ts) {
+  return new Date(ts).toLocaleString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 /** A ten-cell text progress bar: ▓▓▓▓▓░░░░░ — readable in any Telegram font. */
 function progressBar(fraction, width = 10) {
   const filled = Math.max(0, Math.min(width, Math.round(fraction * width)));
@@ -289,6 +296,10 @@ async function handleCommand(chatId, user, text) {
           '/waiting — things you are chasing someone else for',
           '/people — who your open work is coming from',
           '',
+          '<b>Progress</b>',
+          '/progress N — the steps logged so far',
+          '/progress N did the thing — log another step',
+          '',
           '<b>Acting</b>',
           '/done N — mark task N done',
           '/drop N — dismiss task N (not a real task)',
@@ -307,6 +318,38 @@ async function handleCommand(chatId, user, text) {
         ].join('\n')
       );
       return;
+
+    case '/progress': {
+      // "/progress 7" reads the log; "/progress 7 rang the bank" adds a step.
+      const [idText, ...noteParts] = arg.split(/\s+/);
+      const id = parseInt(idText, 10);
+      if (!Number.isFinite(id)) {
+        await send(chatId, 'Usage: <code>/progress 7 what you just did</code>, or <code>/progress 7</code> to read the log.');
+        return;
+      }
+      const task = await dbModule.getTask(user.id, id);
+      if (!task) return void (await send(chatId, `No task #${id}.`));
+
+      const note = noteParts.join(' ').trim();
+      if (note) {
+        const updated = await dbModule.addProgress(user.id, id, note);
+        const n = (updated.progress || []).length;
+        await send(chatId, `📝 Step ${n} logged on <b>#${id}</b> ${esc(task.title)}`);
+        return;
+      }
+
+      const steps = task.progress || [];
+      if (steps.length === 0) {
+        await send(chatId, `No steps logged on <b>#${id}</b> yet.\nAdd one: <code>/progress ${id} what you did</code>`);
+        return;
+      }
+      await send(chatId, [
+        `📋 <b>#${id}</b> ${esc(task.title)}`,
+        '',
+        ...steps.map((e, i) => `<b>${i + 1}.</b> ${esc(e.text)}\n   <i>${esc(whenText(e.at))}</i>`),
+      ].join('\n'));
+      return;
+    }
 
     case '/waiting': {
       const tasks = (await dbModule.listTasksByStatus(user.id, 'open')).filter((t) => t.waiting_on);

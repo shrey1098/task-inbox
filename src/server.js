@@ -417,6 +417,38 @@ function createApp() {
     res.status(201).json(decorate(created, Date.now()));
   });
 
+  /* -------------------------------------------------------- the progress log */
+
+  /**
+   * POST /api/tasks/:id/progress — record a step.
+   *
+   * Append-only by design. A task with three steps behind it is not "not done",
+   * and a status field cannot express that; a log can, and it also answers
+   * "where had I got to?" when you come back to something a week later.
+   */
+  api.post('/tasks/:id/progress', async (req, res) => {
+    const text = String(req.body.text || '').trim();
+    if (!text) return res.status(400).json({ error: 'text required' });
+    // Long enough for a real note, short enough that the capped array cannot
+    // push the document anywhere near Mongo's 16MB limit.
+    if (text.length > 1000) return res.status(400).json({ error: 'keep a step under 1000 characters' });
+
+    const updated = await dbModule.addProgress(req.user.id, Number(req.params.id), text);
+    // null means no such task FOR THIS USER — the tenant filter lives in db.js.
+    if (!updated) return res.status(404).json({ error: 'not found' });
+
+    res.status(201).json(decorate(updated, Date.now()));
+  });
+
+  /** DELETE one step — for the inevitable typo, not for rewriting history. */
+  api.delete('/tasks/:id/progress/:entryId', async (req, res) => {
+    const updated = await dbModule.deleteProgress(
+      req.user.id, Number(req.params.id), Number(req.params.entryId)
+    );
+    if (!updated) return res.status(404).json({ error: 'not found' });
+    res.json(decorate(updated, Date.now()));
+  });
+
   /* ----------------------------------------------------------- preferences */
 
   api.get('/settings', async (req, res) => {
@@ -547,6 +579,9 @@ function decorate(task, now) {
     overdue_by: task.due_at != null && task.due_at < now ? now - task.due_at : 0,
     repeat_text: task.recurrence ? describeRule(task.recurrence) : null,
     xp: xpForTask(task),
+    // Surfaced separately so a list view can show "3 steps" without every row
+    // carrying the full log.
+    progress_count: (task.progress || []).length,
   };
 }
 
