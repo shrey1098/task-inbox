@@ -434,6 +434,18 @@ const PROTECTED = [
 
   /* ===================================================== 7. robustness === */
 
+  await check('a progress timestamp is epoch milliseconds, not a date object', async () => {
+    // Types matter here: the browser does `at - Date.now()`. A BSON Date would
+    // arrive as an ISO string over JSON and that arithmetic would be NaN.
+    const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Typed' }) });
+    await alice(`/api/tasks/${t.body.id}/progress`, { method: 'POST', body: JSON.stringify({ text: 'a step' }) });
+    const read = await alice(`/api/tasks/${t.body.id}`);
+    const entry = read.body.progress[0];
+    assert.strictEqual(typeof entry.at, 'number', `at is a ${typeof entry.at}`);
+    assert.ok(Number.isFinite(entry.at - Date.now()), 'the browser could not compute a relative time from it');
+    assert.strictEqual(typeof entry.id, 'number');
+  });
+
   await check('malformed JSON is a 400, not a crash', async () => {
     const r = await alice('/api/tasks', { method: 'POST', body: '{"title": ' });
     assert.ok(r.status === 400, `got ${r.status}`);

@@ -196,6 +196,24 @@ The security suite assumes an attacker, a second tenant, or bad timing:
 - **Unbounded memory.** The failed-login table grew by one entry per guessed address forever; the SSE registry had no cap. Both are now bounded and swept.
 - **No spend limit.** `/api/messages` calls the model, so a stuck retry loop was an unbounded bill. Capped at 20/minute per account.
 
+### The limit of that testing
+
+Every suite runs against an **in-memory stand-in for MongoDB**, not MongoDB. The
+double mirrors the real behaviour where it matters (duplicate-key errors, the
+field allowlist, tenant filtering, atomic completion), but it is not the
+database. Three things are therefore **unverified against a real server**:
+
+- The **aggregation-pipeline update** in `addProgress` (`$toLong: "$$NOW"`,
+  `$concatArrays`, `$slice`). A review of it found a genuine bug the tests
+  could not — a bare `$$NOW` stores a BSON Date, which would have reached the
+  browser as an ISO string and made every "2h ago" read `NaN`. There may be
+  more of that kind.
+- The **index definitions**, which are only exercised by `connect()`.
+- The **Claude extractor**, which no test calls: the schema, the vision path
+  and the structured-output contract are all unverified since the last change.
+
+Run against a real `mongod` and forward one real message before trusting it.
+
 ### Known gaps, deliberately still open
 
 - **No password reset or change.** Forgetting a password currently means editing the database. The next thing to build if this goes to more people.

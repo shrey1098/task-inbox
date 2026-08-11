@@ -410,11 +410,18 @@ async function addProgress(userId, id, text) {
           progress: {
             $concatArrays: [
               { $ifNull: ['$progress', []] },
-              [{ id: '$progress_seq', at: '$$NOW', text }],
+              // $toLong, NOT a bare $$NOW. $$NOW is a BSON Date, and every
+              // other timestamp in this app is epoch milliseconds — a Number.
+              // A Date here would serialise to an ISO string in JSON, and the
+              // browser's relative() does `ts - Date.now()`, which on a string
+              // is NaN. The in-memory test double used Date.now() and so was
+              // accidentally more correct than this was; no test could have
+              // caught it.
+              [{ id: '$progress_seq', at: { $toLong: '$$NOW' }, text }],
             ],
           },
-          progress_at: '$$NOW',
-          updated_at: '$$NOW',
+          progress_at: { $toLong: '$$NOW' },
+          updated_at: { $toLong: '$$NOW' },
         },
       },
       // 3. cap the array, so a task logged against daily for years stays small
