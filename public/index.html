@@ -47,8 +47,10 @@
       </button>
     </div>
 
-    <!-- The large title. #nav.scrolled fades this out and the inline one in. -->
+    <!-- The large title. #nav.scrolled fades this out and the inline one in.
+         The eyebrow above it is a time-of-day greeting, filled in by app.js. -->
     <div class="large-title-wrap">
+      <p class="eyebrow" id="greeting"></p>
       <h1 class="large-title" id="page-title">Inbox</h1>
       <p class="subtitle" id="synced">Updating…</p>
     </div>
@@ -64,7 +66,9 @@
   </header>
 
   <main id="main">
-    <section class="widget" id="summary" aria-label="Summary"></section>
+    <!-- The hero card. Its whole contents — ring, counts, "up next" — are
+         rendered by app.js, and its gradient reflects how urgent today is. -->
+    <section class="hero" id="hero" aria-label="Overview"></section>
     <div id="content">
       <!-- Skeleton rows shown until the first fetch resolves. -->
       <div class="list">

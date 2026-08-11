@@ -1,12 +1,19 @@
 /* ---------------------------------------------------------------------------
-   Task Inbox — iOS-style UI
+   Task Inbox — iOS-style UI, with colour
    ---------------------------------------------------------------------------
-   Built around Apple's Human Interface Guidelines conventions: the semantic
-   colour system (systemBackground / label / separator rather than raw hex used
-   directly), SF Pro type scale, inset-grouped lists, a collapsing large title,
-   swipe actions, and a translucent tab bar.
+   Still built on Apple's Human Interface Guidelines: the semantic colour system
+   (systemBackground / label / separator rather than raw hex used directly), the
+   SF type scale, inset-grouped lists, a collapsing large title, swipe actions
+   and a translucent tab bar.
 
-   Themes are declared in three scopes, as before:
+   What's added on top is the part that makes it worth looking at:
+     • an ambient mesh gradient behind everything, drifting slowly
+     • a hero card whose gradient reflects how bad today actually is
+     • a progress ring for the day
+     • gradient category tiles with a coloured glow
+     • rows that stagger in, and a burst of confetti when you finish something
+
+   Themes are declared in three scopes:
      1. bare :root                         → light, the default
      2. @media (prefers-color-scheme:dark) → follows the OS
      3. :root[data-theme="dark"]           → the in-app toggle, which must beat
@@ -51,9 +58,19 @@
   --soon:  var(--orange);
   --later: var(--green);
 
+  /* How strongly cards separate from the page. Cards are translucent so the
+     ambient gradient shows through — that is what stops the UI reading flat. */
+  --card-bg:     rgb(255 255 255 / .72);
+  --card-border: rgb(255 255 255 / .70);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 8px 24px -12px rgb(0 0 0 / .18);
+  --blur: saturate(180%) blur(20px);
+
+  /* Ambient blob opacity — dialled back in dark mode, where colour reads hotter. */
+  --ambient: .55;
+
   /* iOS corner radii: 10 for list cells, 14 for cards, 12 for controls. */
   --r-cell: 10px;
-  --r-card: 14px;
+  --r-card: 16px;
   --r-ctl: 9px;
 
   /* The standard iOS ease — a gentle spring-like curve. */
@@ -61,6 +78,9 @@
   --nav-h: 44px; /* standard iOS navigation bar height */
 }
 
+/* The dark palette, written once and applied at both scopes below. Duplicated
+   rather than nested because :where()/:is() would lower specificity below the
+   plain :root above and the light values would win. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -83,6 +103,11 @@
     --pink:   #ff375f;
     --indigo: #5e5ce6;
     --teal:   #40c8e0;
+
+    --card-bg:     rgb(28 28 30 / .68);
+    --card-border: rgb(255 255 255 / .09);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 12px 30px -14px rgb(0 0 0 / .9);
+    --ambient: .40;
   }
 }
 
@@ -106,6 +131,11 @@
   --pink:   #ff375f;
   --indigo: #5e5ce6;
   --teal:   #40c8e0;
+
+  --card-bg:     rgb(28 28 30 / .68);
+  --card-border: rgb(255 255 255 / .09);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 12px 30px -14px rgb(0 0 0 / .9);
+  --ambient: .40;
 }
 
 /* --------------------------------------------------------------------- base */
@@ -125,6 +155,35 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* ------------------------------------------------------- ambient background */
+
+/* Three soft colour blobs, blurred into a mesh gradient, drifting on a long
+   loop. z-index:-1 puts them above the body's own background but behind all
+   normal-flow content, so nothing needs a stacking context of its own.
+
+   --a1/--a2/--a3 are set by app.js from the current state of the list, which is
+   what makes the whole screen shift mood as tasks get urgent or get cleared. */
+body::before {
+  content: "";
+  position: fixed; inset: -25%; z-index: -1;
+  opacity: var(--ambient);
+  pointer-events: none;
+  background:
+    radial-gradient(38% 34% at 18% 14%, var(--a1, var(--blue)) 0%, transparent 70%),
+    radial-gradient(40% 36% at 84% 24%, var(--a2, var(--purple)) 0%, transparent 70%),
+    radial-gradient(46% 40% at 50% 92%, var(--a3, var(--teal)) 0%, transparent 70%);
+  filter: blur(70px);
+  /* The colours cross-fade rather than jumping when the state changes. */
+  transition: background 1.2s linear;
+  animation: drift 34s ease-in-out infinite alternate;
+}
+
+/* Deliberately tiny movement. Anything larger reads as a screensaver. */
+@keyframes drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(-3%, 2%, 0) scale(1.08); }
+}
+
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
 :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; border-radius: 6px; }
 
@@ -138,9 +197,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   position: sticky; top: 0; z-index: 30;
   /* The iOS translucent chrome: a heavily blurred, saturated backdrop so
      content tints the bar as it scrolls underneath. */
-  background: color-mix(in srgb, var(--bg-grouped) 80%, transparent);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  background: color-mix(in srgb, var(--bg-grouped) 62%, transparent);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
 }
 
 .nav-bar {
@@ -175,14 +234,29 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   transition: opacity .2s var(--ease), translate .2s var(--ease);
 }
 #nav.scrolled .large-title-wrap { opacity: 0; translate: 0 -6px; }
-/* iOS Large Title: 34px, bold, tight tracking. */
-.large-title { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.028em; }
+
+/* "Good evening" above the title. Small, uppercase and coloured — the one place
+   the UI addresses you directly. */
+.eyebrow {
+  margin: 0 0 1px; font-size: 12px; font-weight: 640;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--tint);
+}
+
+/* iOS Large Title: 34px, bold, tight tracking. The gradient is clipped to the
+   glyphs, which costs nothing and stops the header reading as plain black. */
+.large-title {
+  margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.028em;
+  background: linear-gradient(100deg, var(--label), color-mix(in srgb, var(--label) 62%, var(--tint)));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
 .subtitle { margin: 2px 0 0; font-size: 13px; color: var(--label-2); }
 
 /* --------------------------------------------------- segmented control */
 
-/* iOS segmented control: a tinted track with a white "thumb" that carries a
-   small shadow and slides between segments. */
+/* iOS segmented control: a tinted track with a "thumb" that carries a small
+   shadow and slides between segments. */
 .seg {
   display: flex; gap: 2px; margin: 4px 16px 10px;
   background: var(--bg-tint); border-radius: var(--r-ctl); padding: 2px;
@@ -191,9 +265,12 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .seg button {
   flex: 1; padding: 6px 0; font-size: 13px; font-weight: 590;
   border-radius: 7px; color: var(--label); position: relative; z-index: 1;
-  transition: opacity .2s var(--ease);
+  transition: opacity .2s var(--ease), color .2s var(--ease);
 }
 .seg button:not(.on) { color: var(--label-2); }
+/* The active segment picks up its own bucket's colour, so the control itself
+   tells you what you are looking at. */
+.seg button.on { color: var(--seg-c, var(--label)); }
 .seg button .n { font-weight: 400; opacity: .55; margin-left: 3px; }
 .seg-thumb {
   position: absolute; top: 2px; bottom: 2px; z-index: 0;
@@ -208,47 +285,122 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 
 /* Section headers in grouped lists: small, grey, and inset to match the cells. */
 .section-head {
-  display: flex; align-items: baseline; gap: 6px;
-  margin: 22px 4px 7px; font-size: 13px; color: var(--label-2);
+  display: flex; align-items: center; gap: 7px;
+  margin: 22px 4px 8px; font-size: 13px; font-weight: 600;
+  color: var(--label-2); letter-spacing: -.005em;
 }
-.section-head .dot { width: 8px; height: 8px; border-radius: 50%; }
-.section-head .count { margin-left: auto; color: var(--label-3); }
+/* A small glowing dot rather than a flat one — the glow is the bucket colour at
+   low alpha, so it reads as a light source instead of a sticker. */
+.section-head .dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent);
+}
+.section-head .count {
+  margin-left: auto; font-variant-numeric: tabular-nums;
+  background: var(--bg-tint); color: var(--label-2);
+  padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+}
 
-/* ---------------------------------------------------------------- widget */
+/* ------------------------------------------------------------------- hero */
 
-/* Summary card, styled after an iOS home-screen widget. */
-.widget {
-  background: var(--bg-cell); border-radius: var(--r-card);
-  padding: 14px 16px; margin-top: 8px;
-  display: grid; grid-template-columns: repeat(3, 1fr);
+/* The card at the top of the inbox. Its gradient is set from the state of the
+   list (red when something is overdue, green when nothing is), which makes the
+   most important fact about your day the first thing you see. */
+.hero {
+  position: relative; overflow: hidden;
+  margin-top: 8px; padding: 16px;
+  border-radius: 20px;
+  display: flex; align-items: center; gap: 16px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--h1, var(--blue)), var(--h2, var(--indigo)));
+  box-shadow: 0 10px 30px -12px color-mix(in srgb, var(--h1, var(--blue)) 70%, transparent);
+  transition: background .8s linear, box-shadow .8s linear;
 }
-.widget .stat { text-align: left; }
-.widget .stat + .stat { border-left: .5px solid var(--separator); padding-left: 14px; }
-.widget .n { font-size: 26px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
-.widget .k {
-  font-size: 12px; color: var(--label-2); margin-top: 1px;
-  display: flex; align-items: center; gap: 5px;
+
+/* A soft highlight in the top-left corner — the sheen that keeps a flat
+   gradient from looking like a solid rectangle. */
+.hero::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(70% 90% at 12% -10%, rgb(255 255 255 / .30), transparent 60%);
 }
-.widget .k i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+.hero .ring { flex: none; position: relative; width: 62px; height: 62px; }
+.hero .ring svg { transform: rotate(-90deg); } /* start the arc at 12 o'clock */
+.hero .ring .track { stroke: rgb(255 255 255 / .28); }
+.hero .ring .arc {
+  stroke: #fff; stroke-linecap: round;
+  transition: stroke-dashoffset .9s var(--ease);
+}
+.hero .ring .pct {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 14px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero .main { flex: 1; min-width: 0; position: relative; z-index: 1; }
+.hero .n {
+  font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.hero .n small { font-size: 15px; font-weight: 600; opacity: .8; margin-left: 5px; letter-spacing: -.01em; }
+
+/* Inline count chips (3 now · 1 overdue) on a translucent white pill. */
+.hero .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.hero .chips span {
+  background: rgb(255 255 255 / .22);
+  border-radius: 999px; padding: 2px 9px;
+  font-size: 12px; font-weight: 600;
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+
+/* "Up next" — the single task the score says to do, surfaced without scrolling. */
+.hero .next {
+  margin-top: 9px; font-size: 13px; opacity: .92;
+  display: flex; align-items: baseline; gap: 4px;
+}
+.hero .next b { font-weight: 700; flex: none; }
+/* The title truncates, not the label. text-overflow needs a block-ish box with
+   min-width:0, which a bare text node inside the flex row would not give us. */
+.hero .next .ttl {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ------------------------------------------------------- inset grouped list */
 
+/* Translucent so the ambient gradient tints the card, with a hairline light
+   border along the top edge — the glass look, done at iOS strength. */
 .list {
-  background: var(--bg-cell); border-radius: var(--r-card);
+  background: var(--card-bg);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: .5px solid var(--card-border);
+  border-radius: var(--r-card);
+  box-shadow: var(--card-shadow);
   overflow: hidden; /* clips the swipe layer to the rounded corners */
 }
 
 /* Each row sits in a clipping container; .row slides left to reveal .swipe. */
-.cell { position: relative; overflow: hidden; background: var(--bg-cell); }
+.cell { position: relative; overflow: hidden; }
+
+/* Rows fade up in sequence on first paint. --i is set per row by app.js; the
+   delay is capped there so a long list does not take a second to appear. */
+.list .cell { animation: rise .4s var(--ease) both; animation-delay: calc(var(--i, 0) * 26ms); }
+@keyframes rise { from { opacity: 0; translate: 0 8px; } }
 
 .row {
-  position: relative; z-index: 1; background: var(--bg-cell);
+  position: relative; z-index: 1; background: transparent;
   display: flex; align-items: flex-start; gap: 12px;
-  padding: 11px 14px 11px 14px;
+  padding: 11px 14px;
   touch-action: pan-y; /* let the page scroll vertically; we own horizontal */
   transition: translate .32s var(--ease);
   user-select: none;
 }
+/* The row must be opaque while sliding or the swipe buttons show through it.
+   Painting the cell colour here (rather than on .row permanently) keeps the
+   card translucent at rest and solid only during the drag. */
+.cell.dragging .row, .cell.open .row { background: var(--bg-cell); }
+
 /* --swipe-w is set per cell by app.js from the number of action buttons, so a
    row with two actions doesn't slide far enough to expose an empty gap. */
 .cell.open .row { translate: calc(-1 * var(--swipe-w, 136px)) 0; }
@@ -261,6 +413,16 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   height: .5px; background: var(--separator);
 }
 
+/* An overdue row gets a faint red wash and a leading bar. Colour alone is never
+   the signal — the subtitle also says "Overdue" in words. */
+.cell.late .row {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--red) 9%, transparent), transparent 55%);
+}
+.cell.late .row::after {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--red);
+}
+
 /* The completion circle, as in Reminders. */
 .check {
   flex: none; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%;
@@ -270,15 +432,24 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 }
 .check:active { scale: .86; }
 .check svg { opacity: 0; transition: opacity .15s var(--ease); }
-.check.on { background: var(--tint); border-color: var(--tint); }
+/* Ticking it fills with the row's own category colour and blooms outward. */
+.check.on { background: var(--c, var(--tint)); border-color: var(--c, var(--tint)); }
 .check.on svg { opacity: 1; }
+.check.just { animation: bloom .45s var(--ease); }
+@keyframes bloom {
+  40% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--c, var(--tint)) 26%, transparent); }
+  to  { box-shadow: 0 0 0 16px transparent; }
+}
 
-/* Category badge: a rounded-square coloured tile with a distinct glyph.
-   The glyph is deliberate — Apple's green and orange are close enough under
-   some colour-blindness that colour alone would not distinguish them. */
+/* Category badge: a rounded-square gradient tile with a distinct glyph, lit by
+   a shadow in its own colour. The glyph is deliberate — Apple's green and
+   orange are close enough under some colour-blindness that colour alone would
+   not distinguish them. */
 .cat {
-  flex: none; width: 28px; height: 28px; border-radius: 7px;
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
   display: grid; place-items: center; color: #fff;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c));
+  box-shadow: 0 3px 9px -3px color-mix(in srgb, var(--c) 75%, transparent);
 }
 .cat svg { width: 16px; height: 16px; }
 
@@ -286,11 +457,14 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .row .t { font-size: 17px; letter-spacing: -.02em; }
 .row.done .t { color: var(--label-2); text-decoration: line-through; }
 .row .sub {
-  font-size: 13px; color: var(--label-2); margin-top: 2px;
+  font-size: 13px; color: var(--label-2); margin-top: 3px;
   display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
 }
 .row .sub .sep { color: var(--label-3); }
-.row .sub .due.late { color: var(--red); }
+/* Mixed toward the current label colour rather than used raw: system red on
+   white is only ~3.4:1, and this pushes it to a comfortable ratio in light mode
+   while lightening it in dark mode, where --label is white. */
+.row .sub .due.late { color: color-mix(in srgb, var(--red) 82%, var(--label)); font-weight: 600; }
 .row .sub .who { color: var(--label-2); }
 .row .detail {
   font-size: 13px; color: var(--label-2); margin-top: 3px;
@@ -298,13 +472,28 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 
-/* Priority pip + score, right-aligned like an iOS accessory view. */
-.row .acc { flex: none; display: flex; align-items: center; gap: 7px; padding-top: 2px; }
-.row .score { font-size: 13px; color: var(--label-3); font-variant-numeric: tabular-nums; }
-.row .pip { width: 8px; height: 8px; border-radius: 50%; }
+/* Priority score, right-aligned like an iOS accessory view. A tinted pill in
+   the bucket's colour reads faster than a grey number beside a dot, and the
+   number is still there for anyone who wants the actual value. */
+.row .acc { flex: none; display: flex; align-items: center; padding-top: 2px; }
+.row .score {
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  /* Same trick as the overdue label: keep the hue, borrow enough of the label
+     colour to stay readable on the tinted pill in both themes. */
+  color: color-mix(in srgb, var(--c) 76%, var(--label));
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  border-radius: 999px; padding: 3px 8px; min-width: 34px; text-align: center;
+}
 
-/* Swipe actions sit behind the row and are uncovered as it slides. */
-.swipe { position: absolute; inset: 0 0 0 auto; display: flex; z-index: 0; }
+/* Swipe actions sit behind the row and are uncovered as it slides.
+   Hidden at rest, and this is load-bearing rather than tidiness: the row is
+   translucent so the card's glass shows through it, which means an always-
+   painted action layer would be visible underneath every row. */
+.swipe {
+  position: absolute; inset: 0 0 0 auto; display: flex; z-index: 0;
+  visibility: hidden;
+}
+.cell.dragging .swipe, .cell.open .swipe { visibility: visible; }
 .swipe button {
   width: 68px; display: grid; place-items: center; gap: 3px;
   color: #fff; font-size: 11px; font-weight: 500;
@@ -316,11 +505,34 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 
 .cell.removing { transition: height .3s var(--ease), opacity .2s var(--ease); overflow: hidden; }
 
+/* ---------------------------------------------------------------- confetti */
+
+/* A short burst from the checkbox when a task is completed. Each piece is a
+   positioned div given a random --dx/--dy/--rot by app.js; the whole container
+   removes itself when the animation ends. Pure decoration, and the first thing
+   prefers-reduced-motion turns off. */
+.confetti { position: fixed; z-index: 70; pointer-events: none; }
+.confetti i {
+  position: absolute; width: 7px; height: 7px; border-radius: 2px;
+  animation: fly .75s var(--ease) forwards;
+}
+@keyframes fly {
+  from { opacity: 1; translate: 0 0; rotate: 0deg; scale: 1; }
+  to   { opacity: 0; translate: var(--dx) var(--dy); rotate: var(--rot); scale: .4; }
+}
+
 /* ------------------------------------------------------------ empty state */
 
-.empty { text-align: center; padding: 56px 24px; color: var(--label-2); }
-.empty .glyph { color: var(--label-3); margin-bottom: 10px; }
-.empty h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; color: var(--label); }
+.empty { text-align: center; padding: 52px 24px; color: var(--label-2); }
+/* The glyph gets the accent gradient and a soft halo, so an empty inbox feels
+   like a reward rather than an error. */
+.empty .glyph {
+  width: 78px; height: 78px; margin: 0 auto 14px; border-radius: 24px;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(145deg, var(--green), var(--teal));
+  box-shadow: 0 14px 34px -14px var(--green);
+}
+.empty h3 { margin: 0 0 4px; font-size: 19px; font-weight: 650; color: var(--label); letter-spacing: -.02em; }
 .empty p { margin: 0; font-size: 14px; }
 
 .list-footer { text-align: center; font-size: 13px; color: var(--label-3); margin: 14px 0 0; }
@@ -331,6 +543,7 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
    a "grabber" bar at the top. The backdrop dims the content behind. */
 .backdrop {
   position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / .4);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity .3s var(--ease);
 }
 .backdrop.on { opacity: 1; pointer-events: auto; }
@@ -339,8 +552,9 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
   max-width: 560px; margin: 0 auto;
   background: var(--bg-cell);
-  border-radius: 14px 14px 0 0;
+  border-radius: 20px 20px 0 0;
   padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  box-shadow: 0 -20px 60px -30px rgb(0 0 0 / .6);
   translate: 0 100%; transition: translate .35s var(--ease);
 }
 .sheet.on { translate: 0 0; }
@@ -348,7 +562,7 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   width: 36px; height: 5px; border-radius: 3px; background: var(--label-3);
   margin: 0 auto 12px;
 }
-.sheet h2 { margin: 0 0 12px; font-size: 20px; font-weight: 650; letter-spacing: -.02em; }
+.sheet h2 { margin: 0 0 12px; font-size: 21px; font-weight: 680; letter-spacing: -.02em; }
 .sheet textarea {
   width: 100%; min-height: 96px; resize: none;
   background: var(--bg-cell-2); border: 0; border-radius: var(--r-cell);
@@ -357,11 +571,14 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .sheet textarea::placeholder { color: var(--label-3); }
 .sheet textarea:focus { outline: 2px solid var(--tint); outline-offset: 0; }
 
-/* Full-width filled button — the standard iOS primary action. */
+/* Full-width filled button — the standard iOS primary action, with a gradient
+   so the one thing you are meant to press is the brightest thing on screen. */
 .btn-primary {
   width: 100%; margin-top: 12px; padding: 14px;
-  background: var(--tint); color: var(--on-tint);
-  border-radius: var(--r-cell); font-size: 17px; font-weight: 600;
+  background: linear-gradient(135deg, var(--tint), var(--indigo));
+  color: var(--on-tint);
+  border-radius: 14px; font-size: 17px; font-weight: 600;
+  box-shadow: 0 8px 20px -10px var(--tint);
   transition: opacity .15s var(--ease), scale .1s var(--ease);
 }
 .btn-primary:active { scale: .985; }
@@ -378,9 +595,9 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   max-width: 560px; margin: 0 auto;
   display: flex;
   padding-bottom: env(safe-area-inset-bottom); /* clears the home indicator */
-  background: color-mix(in srgb, var(--bg-cell) 80%, transparent);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  background: color-mix(in srgb, var(--bg-cell) 72%, transparent);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
   border-top: .5px solid var(--separator);
 }
 .tabbar button {
@@ -390,7 +607,9 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   transition: color .15s var(--ease);
 }
 .tabbar button.on { color: var(--tint); }
-.tabbar svg { width: 25px; height: 25px; }
+/* A lift on the active tab's icon, which is what iOS 18's tab bar does. */
+.tabbar button svg { width: 25px; height: 25px; transition: translate .2s var(--ease), scale .2s var(--ease); }
+.tabbar button.on svg { translate: 0 -1px; scale: 1.06; }
 
 /* ------------------------------------------------------------------ toast */
 
@@ -398,7 +617,9 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .toast {
   position: fixed; left: 50%; translate: -50% 0; bottom: calc(72px + env(safe-area-inset-bottom));
   z-index: 60; max-width: min(90vw, 420px);
-  background: var(--bg-cell); color: var(--label);
+  background: color-mix(in srgb, var(--bg-cell) 88%, transparent);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  color: var(--label);
   border: .5px solid var(--separator); border-radius: 22px;
   padding: 11px 18px; font-size: 14px; text-align: center;
   box-shadow: 0 8px 30px rgb(0 0 0 / .18);
@@ -407,7 +628,7 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 @keyframes pop { from { opacity: 0; translate: -50% 10px; scale: .96; } }
 
 /* Skeleton rows while the first fetch is in flight. */
-.skeleton { height: 62px; background: var(--bg-cell); position: relative; overflow: hidden; }
+.skeleton { height: 62px; position: relative; overflow: hidden; }
 .skeleton + .skeleton::before {
   content: ""; position: absolute; left: 58px; right: 0; top: 0; height: .5px;
   background: var(--separator);
@@ -419,8 +640,11 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 }
 @keyframes shimmer { from { translate: -100% 0; } to { translate: 100% 0; } }
 
+/* One switch that stills everything: the drifting mesh, the row stagger, the
+   confetti, the checkbox bloom. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  .confetti { display: none; }
 }
 
 /* ------------------------------------------------------------ auth screens */
@@ -431,7 +655,14 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .auth {
   width: 100%; max-width: 360px; text-align: center;
 }
-.auth-mark { font-size: 44px; line-height: 1; margin-bottom: 14px; }
+/* The mark gets the same gradient tile treatment as a category badge, so the
+   login screen and the app clearly belong to each other. */
+.auth-mark {
+  width: 72px; height: 72px; margin: 0 auto 16px; border-radius: 22px;
+  display: grid; place-items: center; font-size: 36px; line-height: 1;
+  background: linear-gradient(145deg, var(--blue), var(--indigo));
+  box-shadow: 0 16px 36px -16px var(--indigo);
+}
 .auth h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.025em; }
 .auth-sub { margin: 6px 0 26px; color: var(--label-2); font-size: 15px; }
 
@@ -442,7 +673,9 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 }
 .auth input {
   width: 100%; margin-bottom: 16px; padding: 13px 14px;
-  background: var(--bg-cell); color: var(--label);
+  background: var(--card-bg);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  color: var(--label);
   border: .5px solid var(--separator); border-radius: var(--r-cell);
   font: inherit; font-size: 16px; /* <16px makes iOS Safari zoom on focus */
 }
@@ -468,14 +701,18 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .sheet .group .line + .line { border-top: .5px solid var(--separator); }
 .sheet .group .line .k { color: var(--label-2); }
 .sheet .group .line .v { margin-left: auto; color: var(--label-2); }
-.sheet .group .line .v.ok { color: var(--green); }
+.sheet .group .line .v.ok { color: var(--green); font-weight: 600; }
 
 /* The Telegram link code: large, monospaced and selectable, because the whole
    point is to retype or copy it into another app. */
 .link-code {
-  font: 600 26px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+  font: 700 26px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
   letter-spacing: .14em; text-align: center; padding: 14px;
-  background: var(--bg-cell-2); border-radius: var(--r-cell);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--blue) 14%, transparent),
+    color-mix(in srgb, var(--purple) 14%, transparent));
+  color: var(--label);
+  border-radius: var(--r-cell);
   user-select: all; margin-bottom: 8px;
 }
 .link-hint { font-size: 13px; color: var(--label-2); text-align: center; margin: 0 0 12px; }

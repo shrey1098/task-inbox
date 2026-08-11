@@ -11,6 +11,11 @@
 //   • the collapsing large title (scroll listener → .scrolled on the nav)
 //   • the segmented control's sliding thumb (measured, not CSS-only)
 //   • swipe-to-action rows (pointer events, so a mouse drag works too)
+//
+// The colour of the app is not fixed: the hero card's gradient and the ambient
+// blobs behind the page are both derived from the current state of the list
+// (see MOODS / applyMood), so a clear inbox and an overdue one do not just show
+// different numbers, they feel different.
 // ---------------------------------------------------------------------------
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -41,6 +46,23 @@ const BUCKETS = {
 // Width of one swipe action button; must match .swipe button in the stylesheet.
 // The slide distance is this times the number of buttons the row actually has.
 const SWIPE_BTN_W = 68;
+
+/**
+ * How the app looks in each state of the list, worst first. `when` is tested in
+ * order and the first match wins, so "anything overdue" always beats "some
+ * tasks are urgent". Each mood supplies the hero card's two gradient stops and
+ * the three ambient blob colours behind the page.
+ */
+const MOODS = [
+  { key: 'late',  when: (c) => c.overdue > 0, hero: ['--red', '--orange'],  amb: ['--red', '--orange', '--pink'] },
+  { key: 'now',   when: (c) => c.now > 0,     hero: ['--orange', '--pink'], amb: ['--orange', '--pink', '--purple'] },
+  { key: 'busy',  when: (c) => c.open > 0,    hero: ['--blue', '--indigo'], amb: ['--blue', '--purple', '--teal'] },
+  { key: 'clear', when: () => true,           hero: ['--green', '--teal'],  amb: ['--green', '--teal', '--blue'] },
+];
+
+/** Longest stagger delay we will ever apply, in rows. Beyond this the animation
+ *  delay stops growing, so a 60-item list still finishes appearing promptly. */
+const MAX_STAGGER = 12;
 
 /* ------------------------------------------------------------------ state */
 
@@ -98,6 +120,93 @@ function icon(path, { size = 20, width = 1.8, fill = 'none' } = {}) {
     svg.append(p);
   }
   return svg;
+}
+
+/**
+ * A progress ring, as an SVG donut.
+ *
+ * The arc is drawn by setting stroke-dasharray to the full circumference and
+ * then offsetting the dash by the unfinished portion — the standard trick, and
+ * the reason the fill animates smoothly when only the offset changes.
+ */
+function ring(fraction) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const R = 26;
+  const CIRC = 2 * Math.PI * R;
+
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 62 62');
+  svg.setAttribute('width', 62);
+  svg.setAttribute('height', 62);
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+
+  for (const cls of ['track', 'arc']) {
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', 31); c.setAttribute('cy', 31); c.setAttribute('r', R);
+    c.setAttribute('stroke-width', 6);
+    c.setAttribute('class', cls);
+    if (cls === 'arc') {
+      c.setAttribute('stroke-dasharray', CIRC);
+      // Offset = the part NOT filled. fraction 1 → offset 0 → full circle.
+      c.setAttribute('stroke-dashoffset', CIRC * (1 - fraction));
+    }
+    svg.append(c);
+  }
+
+  return el('div', { class: 'ring' }, [
+    svg,
+    el('div', { class: 'pct' }, `${Math.round(fraction * 100)}%`),
+  ]);
+}
+
+/**
+ * Recolour the app for the current state of the list.
+ *
+ * Only custom properties are written — the hero gradient and the ambient blobs
+ * both read them, and both have a slow CSS transition, so the change arrives as
+ * a cross-fade rather than a jump.
+ */
+function applyMood(counts) {
+  const mood = MOODS.find((m) => m.when(counts));
+  const root = document.documentElement.style;
+  root.setProperty('--h1', `var(${mood.hero[0]})`);
+  root.setProperty('--h2', `var(${mood.hero[1]})`);
+  mood.amb.forEach((v, i) => root.setProperty(`--a${i + 1}`, `var(${v})`));
+  return mood;
+}
+
+/**
+ * A short burst of coloured pieces from a point on screen. Each piece gets a
+ * random direction and spin as inline custom properties; the CSS animation does
+ * the rest and the container removes itself once the longest one finishes.
+ */
+function confetti(fromEl) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const box = fromEl.getBoundingClientRect();
+  const wrap = el('div', {
+    class: 'confetti',
+    style: `left:${box.left + box.width / 2}px; top:${box.top + box.height / 2}px`,
+  });
+  const colors = ['--blue', '--green', '--orange', '--pink', '--purple', '--yellow'];
+
+  for (let i = 0; i < 12; i += 1) {
+    // Spread over a full circle, with enough jitter that the burst does not
+    // read as a clock face.
+    const angle = (i / 12) * Math.PI * 2 + Math.random() * 0.5;
+    const dist = 34 + Math.random() * 34;
+    wrap.append(el('i', {
+      style: [
+        `background: var(${colors[i % colors.length]})`,
+        `--dx: ${Math.cos(angle) * dist}px`,
+        `--dy: ${Math.sin(angle) * dist}px`,
+        `--rot: ${Math.round(Math.random() * 540 - 270)}deg`,
+      ].join(';'),
+    }));
+  }
+
+  document.body.append(wrap);
+  setTimeout(() => wrap.remove(), 900); // just past the 750ms animation
 }
 
 let toastTimer;
@@ -235,25 +344,33 @@ function taskRow(task) {
   const isDone = task.status === 'done';
   const cat = CATEGORY[task.category] || CATEGORY.other;
 
-  const cell = el('div', { class: 'cell' });
+  // .late gives the row its red wash and leading bar; the subtitle still says
+  // "Overdue" in words, so the state is never carried by colour alone.
+  const cell = el('div', { class: `cell ${task.overdue && !isDone ? 'late' : ''}` });
 
-  // --- the completion circle
+  // --- the completion circle. --c is the category colour, which the circle
+  //     fills with when ticked and which the bloom ring borrows.
   const check = el('button', {
     class: `check ${isDone ? 'on' : ''}`,
     type: 'button',
+    style: `--c:${cat.color}`,
     'aria-label': isDone ? 'Mark not done' : 'Mark done',
     onclick: (e) => {
       e.stopPropagation();
       const next = isDone ? { status: 'open' } : { status: 'done' };
       check.classList.toggle('on');           // instant visual feedback
+      if (!isDone) {
+        check.classList.add('just');          // the expanding ring
+        confetti(check);                      // …and the small celebration
+      }
       setTimeout(() => mutate(cell, task.id, next, 'Could not update'), 160);
     },
   }, icon('M5 12.5l4.5 4.5L19 7.5', { size: 13, width: 2.6 }));
 
-  // --- category tile
+  // --- category tile. The gradient and glow are built in CSS from --c.
   const catTile = el('span', {
     class: 'cat',
-    style: `background:${cat.color}`,
+    style: `--c:${cat.color}`,
     title: task.category || 'other',
   }, icon(cat.path, { size: 16, width: 1.9 }));
 
@@ -288,11 +405,14 @@ function taskRow(task) {
       subLine.length ? el('div', { class: 'sub' }, subLine) : null,
       task.details ? el('div', { class: 'detail' }, task.details) : null,
     ].filter(Boolean)),
-    // Accessory: score plus a priority pip. The title attribute carries the
-    // full breakdown from priority.js, so the ranking stays inspectable.
+    // Accessory: the score as a pill tinted with its bucket's colour. The title
+    // attribute carries the full breakdown from priority.js, so the ranking
+    // stays inspectable rather than being a mystery number.
     isDone ? null : el('div', { class: 'acc', title: task.explanation }, [
-      el('span', { class: 'score' }, String(Math.round(task.score))),
-      el('span', { class: 'pip', style: `background:${BUCKETS[task.bucket].color}` }),
+      el('span', {
+        class: 'score',
+        style: `--c:${BUCKETS[task.bucket].color}`,
+      }, String(Math.round(task.score))),
     ]),
   ].filter(Boolean));
 
@@ -330,25 +450,69 @@ function taskRow(task) {
 
 /* --------------------------------------------------------------- rendering */
 
-function renderSummary() {
-  const counts = { now: 0, soon: 0, later: 0 };
-  for (const t of state.open) counts[t.bucket] = (counts[t.bucket] || 0) + 1;
-
+/**
+ * The hero card: a progress ring for the day, the open count, state chips, and
+ * whichever task the score says to do next. Rendering it also sets the app's
+ * mood, which is why it runs even on the Completed tab.
+ */
+function renderHero() {
   const startOfDay = new Date().setHours(0, 0, 0, 0);
   const doneToday = state.done.filter((t) => (t.completed_at ?? 0) >= startOfDay).length;
-  const overdue = state.open.filter((t) => t.overdue).length;
 
-  const stat = (n, label, color) =>
-    el('div', { class: 'stat' }, [
-      el('div', { class: 'n' }, String(n)),
-      el('div', { class: 'k' }, [color ? el('i', { style: `background:${color}` }) : null, label].filter(Boolean)),
-    ]);
+  const counts = {
+    open: state.open.length,
+    now: state.open.filter((t) => t.bucket === 'now').length,
+    overdue: state.open.filter((t) => t.overdue).length,
+    doneToday,
+  };
 
-  $('#summary').replaceChildren(
-    stat(state.open.length, 'Open'),
-    stat(overdue, 'Overdue', 'var(--now)'),
-    stat(doneToday, 'Done today', 'var(--later)')
+  // The mood is applied on every tab — the ambient colour should not jump when
+  // you glance at the archive — but the card itself is about the inbox, so it
+  // is hidden there rather than showing open-task stats above completed rows.
+  const mood = applyMood(counts);
+  $('#hero').style.display = state.tab === 'done' ? 'none' : '';
+  if (state.tab === 'done') return;
+
+  // Today's progress: finished today, over everything that could still be
+  // finished today. Both zero means an empty day, which we show as a full ring
+  // rather than 0% — nothing outstanding is a complete day, not a failed one.
+  const total = doneToday + counts.open;
+  const fraction = total === 0 ? 1 : doneToday / total;
+
+  const chips = [];
+  if (counts.overdue) chips.push(`${counts.overdue} overdue`);
+  if (counts.now) chips.push(`${counts.now} urgent`);
+  chips.push(doneToday === 1 ? '1 done today' : `${doneToday} done today`);
+
+  // The list arrives sorted by score, so the first open task is the top one.
+  const next = state.open[0];
+
+  const headline = counts.open === 0
+    ? el('div', { class: 'n' }, mood.key === 'clear' && doneToday ? 'All clear' : 'Nothing due')
+    : el('div', { class: 'n' }, [
+        String(counts.open),
+        el('small', {}, counts.open === 1 ? 'task open' : 'tasks open'),
+      ]);
+
+  $('#hero').replaceChildren(
+    ring(fraction),
+    el('div', { class: 'main' }, [
+      headline,
+      el('div', { class: 'chips' }, chips.map((c) => el('span', {}, c))),
+      next ? el('div', { class: 'next', title: next.title }, [
+        el('b', {}, 'Up next'),
+        el('span', { class: 'ttl' }, `· ${next.title}`),
+      ]) : null,
+    ].filter(Boolean))
   );
+}
+
+/** "Good morning" / "Good afternoon" / "Good evening", plus today's date. */
+function renderGreeting() {
+  const h = new Date().getHours();
+  const part = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
+  const date = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+  $('#greeting').textContent = `Good ${part} · ${date}`;
 }
 
 /** Update the segmented control's counts and slide the thumb under the active one. */
@@ -359,6 +523,8 @@ function renderSegments() {
   for (const btn of $$('#seg button')) {
     const key = btn.dataset.filter;
     btn.classList.toggle('on', key === state.filter);
+    // The selected segment takes its bucket's colour; "All" stays neutral.
+    btn.style.setProperty('--seg-c', BUCKETS[key]?.color ?? 'var(--label)');
     // .filter(Boolean) is load-bearing: replaceChildren(null) renders the
     // literal string "null", exactly as append(null) does.
     btn.replaceChildren(
@@ -399,13 +565,26 @@ function emptyState() {
   ]);
 }
 
+/**
+ * Build the rows of one list, tagging each with its position so the CSS can
+ * stagger them in. The index is capped so a long list still finishes appearing
+ * quickly instead of trickling in for a second and a half.
+ */
+function rowsOf(tasks) {
+  return tasks.map((task, i) => {
+    const cell = taskRow(task);
+    cell.style.setProperty('--i', String(Math.min(i, MAX_STAGGER)));
+    return cell;
+  });
+}
+
 function renderList() {
   const content = $('#content');
 
   if (state.tab === 'done') {
     const rows = state.done.slice(0, 50);
     content.replaceChildren(
-      rows.length ? el('div', { class: 'list' }, rows.map(taskRow)) : emptyState()
+      rows.length ? el('div', { class: 'list' }, rowsOf(rows)) : emptyState()
     );
     $('#list-footer').textContent = state.done.length
       ? `${state.done.length} completed`
@@ -430,11 +609,11 @@ function renderList() {
     if (group.length === 0) continue;
     frag.append(
       el('div', { class: 'section-head' }, [
-        el('span', { class: 'dot', style: `background:${BUCKETS[key].color}` }),
+        el('span', { class: 'dot', style: `--c:${BUCKETS[key].color}` }),
         BUCKETS[key].name,
         el('span', { class: 'count' }, String(group.length)),
       ]),
-      el('div', { class: 'list' }, group.map(taskRow))
+      el('div', { class: 'list' }, rowsOf(group))
     );
   }
   content.replaceChildren(frag);
@@ -445,7 +624,8 @@ function render() {
   $('#page-title').textContent = state.tab === 'done' ? 'Completed' : 'Inbox';
   // The filter only applies to the inbox, so hide it on the Completed tab.
   $('#seg').style.display = state.tab === 'done' ? 'none' : '';
-  renderSummary();
+  renderGreeting();
+  renderHero(); // also sets the app's mood colours
   renderSegments();
   renderList();
 }
