@@ -22,6 +22,9 @@ const { createLogger } = require('./log');
 
 const log = createLogger('events');
 
+/** How many tabs one account may hold open at once. */
+const MAX_STREAMS_PER_USER = 8;
+
 /** userId → Set of open response objects. One per browser tab. */
 const subscribers = new Map();
 
@@ -33,7 +36,20 @@ const subscribers = new Map();
  */
 function subscribe(userId, res) {
   if (!subscribers.has(userId)) subscribers.set(userId, new Set());
-  subscribers.get(userId).add(res);
+  const set = subscribers.get(userId);
+
+  // A cap, because each connection holds a socket and a heartbeat timer for as
+  // long as it lives. A misbehaving page — or somebody deliberately opening
+  // streams in a loop — should not be able to exhaust the server's sockets.
+  // Dropping the OLDEST is right: the newest connection is the live tab.
+  while (set.size >= MAX_STREAMS_PER_USER) {
+    const oldest = set.values().next().value;
+    set.delete(oldest);
+    try { oldest.end(); } catch { /* already gone */ }
+    log.warn(`user #${userId} hit the stream cap; closed the oldest`);
+  }
+
+  set.add(res);
 
   return () => {
     const set = subscribers.get(userId);

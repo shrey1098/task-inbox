@@ -334,6 +334,25 @@ async function updateTaskFields(userId, id, fields) {
   return res; // null when the task does not exist OR belongs to someone else
 }
 
+/**
+ * Mark a task done, but only if it is not done already.
+ *
+ * The guard is `status: { $ne: 'done' }` inside the query, which makes the
+ * check and the write one atomic operation. Reading the status first and
+ * writing afterwards leaves a window between the two: two taps arriving
+ * together both see "open", both complete it, and a recurring task spawns two
+ * next occurrences. Returning null for the loser lets the caller tell which
+ * request actually did the work.
+ */
+async function completeTaskAtomically(userId, id, now = Date.now()) {
+  const res = await db.collection('tasks').findOneAndUpdate(
+    { id, user_id: userId, status: { $ne: 'done' } },
+    { $set: { status: 'done', completed_at: now, updated_at: now } },
+    { returnDocument: 'after' }
+  );
+  return res; // null = somebody else got there first, or it is not your task
+}
+
 /** Score-only update — used by the periodic rescore, which touches many rows. */
 async function updateTaskScore(id, score, now = Date.now()) {
   await db.collection('tasks').updateOne({ id }, { $set: { score, updated_at: now } });
@@ -375,26 +394,35 @@ const MAX_PROGRESS = 100;
  * for a year cannot grow the document without bound.
  */
 async function addProgress(userId, id, text) {
-  const task = await getTask(userId, id);
-  if (!task) return null;
-
-  const entries = task.progress || [];
-  const entry = {
-    // Highest existing id plus one, so ids keep rising even after deletions.
-    id: entries.reduce((max, e) => Math.max(max, e.id || 0), 0) + 1,
-    at: Date.now(),
-    text,
-  };
-
+  // An aggregation-pipeline update (Mongo 4.2+), so the whole thing is one
+  // atomic operation. The obvious version — read the task, work out the next
+  // id, then push — has a window between the read and the write: two steps
+  // logged at the same moment both compute the same id, and deleting one would
+  // then delete both. Incrementing a counter inside the update closes it.
   const res = await db.collection('tasks').findOneAndUpdate(
     { id, user_id: userId },
-    {
-      $push: { progress: { $each: [entry], $slice: -MAX_PROGRESS } },
-      $set: { progress_at: entry.at, updated_at: entry.at },
-    },
+    [
+      // 1. bump the per-task counter, defaulting it for tasks made before it existed
+      { $set: { progress_seq: { $add: [{ $ifNull: ['$progress_seq', 0] }, 1] } } },
+      // 2. append the entry, using the value the previous stage just computed
+      {
+        $set: {
+          progress: {
+            $concatArrays: [
+              { $ifNull: ['$progress', []] },
+              [{ id: '$progress_seq', at: '$$NOW', text }],
+            ],
+          },
+          progress_at: '$$NOW',
+          updated_at: '$$NOW',
+        },
+      },
+      // 3. cap the array, so a task logged against daily for years stays small
+      { $set: { progress: { $slice: ['$progress', -MAX_PROGRESS] } } },
+    ],
     { returnDocument: 'after' }
   );
-  return res;
+  return res; // null when the task does not exist or belongs to someone else
 }
 
 /** Remove one step. Used for the inevitable typo, not for hiding history. */
@@ -633,6 +661,7 @@ module.exports = {
   listTasksByStatus,
   listAllTasks,
   updateTaskFields,
+  completeTaskAtomically,
   updateTaskScore,
   deleteTask,
   countByStatus,

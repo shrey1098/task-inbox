@@ -197,10 +197,15 @@ function buildNextOccurrence(task, now = Date.now()) {
  * Returns { task, next }, where next is the newly created occurrence or null.
  */
 async function completeTask(dbModule, userId, task, now = Date.now()) {
-  const updated = await dbModule.updateTaskFields(userId, task.id, {
-    status: 'done',
-    completed_at: now,
-  });
+  // Atomic: the write only lands if the task was not already done. Two taps
+  // arriving together would otherwise both pass a "is it open?" check and both
+  // spawn a next occurrence, quietly duplicating a recurring chore.
+  const updated = await dbModule.completeTaskAtomically(userId, task.id, now);
+  if (!updated) {
+    // Somebody else completed it first. Report the current state and, crucially,
+    // do not spawn anything — the winner already did.
+    return { task: await dbModule.getTask(userId, task.id), next: null, alreadyDone: true };
+  }
 
   const spec = buildNextOccurrence(task, now);
   if (!spec) return { task: updated, next: null };

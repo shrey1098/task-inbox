@@ -164,6 +164,48 @@ missed day does.
 - **Search** — partial-word matching across titles, details, requesters and notes.
 - **Stats** — level, streak, lifetime totals, and a summary for any period you pick, including an arbitrary date range.
 
+## Production readiness
+
+`npm test` runs three suites — 102 checks in total:
+
+| Suite | What it covers |
+| --- | --- |
+| `test/logic.test.js` | Pure logic: recurrence dates, streaks, XP, period parsing, the authority floor |
+| `test/auth.test.js` | Accounts, tenancy, and the feature surface end to end |
+| `test/security.test.js` | The adversarial pass — see below |
+
+The security suite assumes an attacker, a second tenant, or bad timing:
+
+- **Authentication** — every protected route refuses an anonymous caller; forged, malformed and never-issued cookies; expired sessions (refused *and* deleted); per-device logout; cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` only over HTTPS).
+- **Rate limiting** — brute force is locked out, the lockout holds even against the correct password, and one locked account does **not** lock out others on the same IP.
+- **Enumeration** — a wrong password and an unknown email return the same status, the same message, and take the **same amount of time**.
+- **Tenant isolation** — every verb on another account's task 404s; a PATCH cannot reassign ownership; search, people, calendar and summary never cross accounts; ten accounts writing concurrently keep their data separate.
+- **The live stream** — one account's events never reach another account's tab.
+- **Write races** — the same task completed twice at once completes once and spawns one recurrence; concurrent progress entries all survive with unique ids.
+- **Robustness** — malformed JSON, oversized bodies, nonsense ids, and a database failure mid-request all produce a clean status with no stack trace, and the process stays up.
+- **Load** — 120 interleaved requests across 6 accounts, then every account's data is checked for consistency.
+
+### What the audit changed
+
+- **Unhandled async rejections crashed the process.** Express 4 ignores the promise an `async` handler returns, so one transient database error both hung the request and killed the server. Every handler is now wrapped, with a real error handler behind it.
+- **Stack traces leaked.** Express's default error handler returns them whenever `NODE_ENV` is not exactly `production`. There is now an explicit handler: full detail to the log, `{"error":"something went wrong"}` to the client.
+- **Login timing was an enumeration oracle.** An unknown email skipped the password hash and answered ~80× faster. It now verifies against a decoy hash so both paths cost the same.
+- **Completion was not atomic.** Two taps at once could both pass the "is it done?" check and spawn two copies of a recurring chore. It is now a single conditional update.
+- **Progress ids could collide** under concurrent appends, so deleting one entry would delete two. Now generated inside an aggregation-pipeline update (needs MongoDB 4.2+).
+- **No security headers.** Added `nosniff`, `X-Frame-Options: DENY`, a strict CSP, `Referrer-Policy`, HSTS over HTTPS only, and `X-Powered-By` removed.
+- **Unbounded memory.** The failed-login table grew by one entry per guessed address forever; the SSE registry had no cap. Both are now bounded and swept.
+- **No spend limit.** `/api/messages` calls the model, so a stuck retry loop was an unbounded bill. Capped at 20/minute per account.
+
+### Known gaps, deliberately still open
+
+- **No password reset or change.** Forgetting a password currently means editing the database. The next thing to build if this goes to more people.
+- **No email verification.** Anyone who can reach the signup page can register any address — which is why you should set `ALLOW_SIGNUP=false` once your accounts exist.
+- **Single-process assumptions.** The rate limiter and the SSE subscriber registry live in memory. Correct for one Node process; running two behind a load balancer needs a shared store (Redis, or a Mongo change stream for the events).
+- **`TRUST_PROXY` matters more than it looks.** Behind a reverse proxy with it unset, every client appears to come from the proxy's IP, so the IP-wide login cap could lock out everybody at once. Set it to `true` whenever there is a proxy in front.
+- **No CSRF token.** `SameSite=Lax` is the whole mitigation. That is sound here — there are no state-changing `GET`s, and every write is a JSON `POST`/`PATCH` that a cross-site form cannot forge — but it is one layer, not two.
+- **Photos are stored as base64 in MongoDB.** Fine at personal volume; it will grow faster than text if you forward hundreds of screenshots.
+- **No audit log** of who changed what.
+
 ## Ops notes
 
 - Messages that fail extraction (API outage etc.) are kept with `status: failed` and retried on boot, or manually via `npm run reprocess`.

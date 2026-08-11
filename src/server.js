@@ -57,8 +57,120 @@ function requestLogger(req, res, next) {
   next(); // hand control to the next middleware — omit this and the request hangs
 }
 
+/**
+ * Wrap one route handler so a rejected promise becomes an Express error.
+ *
+ * Express 4 predates async functions: it calls the handler and ignores the
+ * promise it returns. A handler that throws therefore never answers the
+ * request AND raises an unhandledRejection, which on modern Node terminates
+ * the process. One transient database blip would take the whole server down.
+ */
+const wrapHandler = (fn) => {
+  if (typeof fn !== 'function') return fn; // a path string, an array, a sub-router
+
+  // Express identifies an error handler purely by its ARITY: four parameters
+  // means "call me with the error". A wrapper that always takes three silently
+  // demotes it to ordinary middleware — Express then falls back to its own
+  // handler and returns the stack trace to the client. That is exactly what
+  // happened here the first time, and exactly what the test caught.
+  if (fn.length === 4) {
+    return (err, req, res, next) => {
+      Promise.resolve(fn(err, req, res, next)).catch(next);
+    };
+  }
+
+  // Promise.resolve() so a synchronous throw takes the same path as a rejection.
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+/**
+ * Make every handler registered on a router async-safe, rather than relying on
+ * each route being wrapped by hand — which works until somebody adds the
+ * twenty-first route and forgets.
+ */
+function catchAsync(router) {
+  for (const verb of ['get', 'post', 'put', 'patch', 'delete', 'use']) {
+    const original = router[verb].bind(router);
+    router[verb] = (...args) => original(...args.map(wrapHandler));
+  }
+  return router;
+}
+
+/*
+ * A small per-account rate limiter for the endpoints that cost real money.
+ *
+ * Every call to /api/messages is a Claude API request. Authentication stops a
+ * stranger spending your credit, but nothing stops a stuck retry loop in a
+ * page — or a careless script — from making a thousand calls a minute. This is
+ * the cap that turns a runaway bill into a 429.
+ */
+const spend = new Map(); // userId → { n, first }
+const SPEND_WINDOW_MS = 60e3;
+const SPEND_MAX = 20;    // per account per minute; a person cannot type this fast
+
+function overSpendLimit(userId) {
+  const rec = spend.get(userId);
+  const now = Date.now();
+  if (!rec || now - rec.first > SPEND_WINDOW_MS) {
+    spend.set(userId, { n: 1, first: now });
+    return false;
+  }
+  rec.n += 1;
+  return rec.n > SPEND_MAX;
+}
+
+// Same reasoning as the login limiter: sweep, or the map grows with every user
+// who has ever posted a message.
+setInterval(() => {
+  const cutoff = Date.now() - SPEND_WINDOW_MS;
+  for (const [k, rec] of spend) if (rec.first < cutoff) spend.delete(k);
+}, 5 * 60e3).unref();
+
+/**
+ * The headers a browser needs in order to defend the page. No dependency:
+ * these are four constant strings, and helmet would bring a tree of them.
+ */
+function securityHeaders(_req, res, next) {
+  // Stop a browser second-guessing a declared content type — the trick behind
+  // "upload a .txt that runs as script".
+  res.set('x-content-type-options', 'nosniff');
+  // Clickjacking. frame-ancestors in the CSP is the modern spelling; the
+  // header is kept for older browsers that ignore it.
+  res.set('x-frame-options', 'DENY');
+  // Don't hand full URLs (which include task ids) to other origins.
+  res.set('referrer-policy', 'same-origin');
+  // Everything this app loads is same-origin. The one exception is the favicon,
+  // which is an inline SVG data: URI. No inline <script> or <style> exists in
+  // the markup, so neither needs 'unsafe-inline' — setting element.style from
+  // JavaScript is CSSOM and is not covered by style-src.
+  // Only over HTTPS: sending HSTS over plain HTTP is meaningless, and sending
+  // it from a local dev server would pin localhost to HTTPS in your browser
+  // for a year, which is a genuinely annoying thing to undo.
+  if (res.req.secure || res.req.headers['x-forwarded-proto'] === 'https') {
+    res.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  }
+  res.set('content-security-policy', [
+    "default-src 'self'",
+    "img-src 'self' data:",
+    "script-src 'self'",
+    "style-src 'self'",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+  ].join('; '));
+  next();
+}
+
 function createApp() {
   const app = express();
+
+  // Do not advertise the framework. It is free reconnaissance for an attacker
+  // deciding which exploits to try.
+  app.disable('x-powered-by');
 
   // Behind a reverse proxy (Caddy, nginx, a PaaS router) this makes req.secure
   // and req.ip reflect the ORIGINAL request rather than the proxy hop — which
@@ -66,7 +178,11 @@ function createApp() {
   // login rate limiter counts against.
   if (config.trustProxy) app.set('trust proxy', 1);
 
+  // Every handler registered on `app` from here on is async-safe.
+  catchAsync(app);
+
   // Middleware order matters: each runs in the order registered.
+  app.use(securityHeaders);                  // 0. before anything can respond
   app.use(requestLogger);                    // 1. time everything
   app.use(express.json({ limit: '256kb' })); // 2. parse JSON bodies (capped — nothing here is large)
   app.use(auth.attachUser);                  // 3. set req.user from the session cookie
@@ -134,7 +250,11 @@ function createApp() {
 
     // The same message for "no such account" and "wrong password": telling them
     // apart would let someone enumerate which emails are registered.
-    const ok = user ? await auth.verifyPassword(password, user.password_hash) : false;
+    // verifyDecoy when there is no such account, so both branches take the same
+    // ~80ms. Skipping the hash for a missing user is the timing leak.
+    const ok = user
+      ? await auth.verifyPassword(password, user.password_hash)
+      : await auth.verifyDecoy(password);
     if (!ok) {
       auth.noteFailure(ip, email);
       log.warn(`failed login for ${email || '(blank)'} from ${ip}`);
@@ -157,7 +277,7 @@ function createApp() {
   /* --------------------------------------------------------- the task API */
 
   // A Router groups the API endpoints so they can be mounted under /api below.
-  const api = express.Router();
+  const api = catchAsync(express.Router());
   api.use(auth.requireAuth); // every route below needs a signed-in user
 
   // GET /api/tasks?status=open — the dashboard's main read.
@@ -545,6 +665,12 @@ function createApp() {
   // POST /api/messages — the dashboard capture box (and handy for curl).
   // Same pipeline as Telegram, minus Telegram.
   api.post('/messages', async (req, res) => {
+    // This endpoint calls the model, so it is the one that can run up a bill.
+    if (overSpendLimit(req.user.id)) {
+      log.warn(`#${req.user.id} hit the capture rate limit`);
+      return res.status(429).json({ error: 'slow down — too many captures in a minute' });
+    }
+
     const text = (req.body.text || '').trim();
     if (!text) return res.status(400).json({ error: 'text required' });
 
@@ -567,6 +693,36 @@ function createApp() {
   });
 
   app.use('/api', api); // every route above is now prefixed with /api
+
+  /**
+   * The last word on every failed request.
+   *
+   * Four arguments is what marks a function as Express's error handler, and it
+   * must be registered after the routes. Without it Express falls back to its
+   * default, which returns the stack trace in the response body whenever
+   * NODE_ENV is not exactly "production" — telling anyone who can trigger an
+   * error the file layout of the server.
+   */
+  app.use((err, req, res, next) => {
+    // Headers already flushed (a streaming response, say) — hand it back to
+    // Express to close the connection; there is no way to send a status now.
+    if (res.headersSent) return next(err);
+
+    // body-parser attaches a status for malformed JSON (400) and oversized
+    // bodies (413). Those are the caller's fault and safe to describe.
+    const status = err.status || err.statusCode || 500;
+
+    if (status >= 500) {
+      // The full detail goes to the log, where it belongs, and never to the
+      // client.
+      log.error(`${req.method} ${req.originalUrl} failed:`, err.stack || err.message);
+      return res.status(500).json({ error: 'something went wrong' });
+    }
+
+    log.warn(`${req.method} ${req.originalUrl} rejected: ${err.message}`);
+    res.status(status).json({ error: status === 413 ? 'that is too large' : 'bad request' });
+  });
+
   return app;
 }
 

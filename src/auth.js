@@ -39,6 +39,27 @@ async function hashPassword(password) {
 }
 
 /**
+ * A real scrypt hash of nothing in particular.
+ *
+ * Used when the email does not exist, so that branch costs the same as a wrong
+ * password. Without it an unknown account answers in about a millisecond while
+ * a real one takes ~80ms verifying the hash, and that gap is a reliable oracle
+ * for "does this account exist" — the identical error message achieves nothing
+ * if the clock gives the answer away.
+ */
+let decoyHash = null;
+async function verifyDecoy(password) {
+  // Built once, lazily, so startup does not pay for it.
+  if (!decoyHash) decoyHash = await hashPassword('a password nobody has');
+  try {
+    await verifyPassword(password, decoyHash);
+  } catch {
+    // The result is discarded either way; this exists only to burn the time.
+  }
+  return false;
+}
+
+/**
  * Check a password against a stored "salt:hash".
  *
  * timingSafeEqual compares in constant time. A plain === would return as soon
@@ -154,6 +175,21 @@ function bump(key) {
   else rec.n += 1;
 }
 
+/*
+ * Prune expired counters.
+ *
+ * current() only forgets a key when that exact key is looked up again, so an
+ * attacker cycling through fresh email addresses would add an entry per guess
+ * and never revisit any of them — a slow memory leak that is also a denial of
+ * service. A sweep on a timer bounds it.
+ */
+const PRUNE_EVERY_MS = 5 * 60e3;
+setInterval(() => {
+  const cutoff = Date.now() - WINDOW_MS;
+  for (const [key, rec] of attempts) if (rec.first < cutoff) attempts.delete(key);
+  // unref below means this timer never keeps the process alive on its own.
+}, PRUNE_EVERY_MS).unref();
+
 function tooManyAttempts(ip, email = '') {
   return current(`${ip}|${email}`) >= MAX_PER_ACCOUNT || current(`ip:${ip}`) >= MAX_PER_IP;
 }
@@ -195,6 +231,7 @@ module.exports = {
   COOKIE,
   hashPassword,
   verifyPassword,
+  verifyDecoy,
   createSession,
   destroySession,
   userForToken,
@@ -204,6 +241,7 @@ module.exports = {
   tooManyAttempts,
   noteFailure,
   clearAttempts,
+  attemptsSize: () => attempts.size,
   attachUser,
   requireAuth,
 };

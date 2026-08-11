@@ -73,6 +73,14 @@ const fakeDb = {
     t.updated_at = Date.now();
     return t;
   },
+  // Mirrors the real conditional update: the write only lands if the task is
+  // not already done, so two concurrent completions cannot both win.
+  completeTaskAtomically: async (uid, id, now = Date.now()) => {
+    const t = tasks.find((x) => x.id === id && x.user_id === uid);
+    if (!t || t.status === 'done') return null;
+    Object.assign(t, { status: 'done', completed_at: now, updated_at: now });
+    return t;
+  },
   updateTaskScore: async (id, sc) => { const t = tasks.find((x) => x.id === id); if (t) t.score = sc; },
   deleteTask: async (uid, id) => { const i = tasks.findIndex((t) => t.id === id && t.user_id === uid); if (i < 0) return false; tasks.splice(i, 1); return true; },
   countByStatus: async (uid) => Object.entries(
