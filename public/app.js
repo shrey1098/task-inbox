@@ -461,20 +461,19 @@ async function completeTask(cell, check, task) {
  * movement, and then locked — otherwise a diagonal drag fights the scroller.
  */
 function attachSwipe(cell, row, openW, onTap) {
-  let startX = 0, startY = 0, dx = 0, axis = null, dragging = false, moved = false;
+  let startX = 0, startY = 0, dx = 0, axis = null, dragging = false;
 
   row.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;             // ignore right-click
     if (e.target.closest('.check')) return; // let the circle handle its own tap
     startX = e.clientX; startY = e.clientY;
-    dx = 0; axis = null; dragging = true; moved = false;
+    dx = 0; axis = null; dragging = true;
   });
 
   row.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const mx = e.clientX - startX;
     const my = e.clientY - startY;
-    if (Math.abs(mx) > 4 || Math.abs(my) > 4) moved = true;
 
     // Lock the axis once movement is unambiguous (>6px in one direction).
     if (!axis) {
@@ -506,9 +505,14 @@ function attachSwipe(cell, row, openW, onTap) {
     if (axis === 'x') {
       // Past a third of the way = open; otherwise snap shut.
       cell.classList.toggle('open', dx < -openW / 3);
-    } else if (!moved) {
-      // A tap, not a drag. A swiped-open row closes instead of opening detail,
-      // which is what every iOS list does.
+    } else if (axis === null) {
+      // No axis was ever locked, so the finger stayed inside the 6px threshold:
+      // that is a tap. Testing for "an axis was never chosen" rather than for a
+      // separate movement flag matters — an earlier version tripped that flag
+      // at 4px while the axis locked at 6px, so any tap that wobbled 5px fell
+      // into a dead zone and did nothing at all. On a touchscreen that is most
+      // taps, which is why the detail sheet seemed not to exist.
+      // A swiped-open row closes instead, as every iOS list does.
       if (cell.classList.contains('open')) cell.classList.remove('open');
       else onTap?.();
     }
@@ -604,12 +608,15 @@ function taskRow(task) {
     // Accessory: the score as a pill tinted with its bucket's colour. The title
     // attribute carries the full breakdown from priority.js, so the ranking
     // stays inspectable rather than being a mystery number.
-    isDone ? null : el('div', { class: 'acc', title: task.explanation }, [
-      el('span', {
+    el('div', { class: 'acc', title: task.explanation }, [
+      isDone ? null : el('span', {
         class: 'score',
         style: `--c:${BUCKETS[task.bucket].color}`,
       }, String(Math.round(task.score))),
-    ]),
+      // The disclosure chevron. Without it nothing on the row says it is
+      // tappable, and the whole edit sheet goes undiscovered.
+      el('span', { class: 'chev' }, icon('M9 5l7 7-7 7', { size: 14, width: 2.4 })),
+    ].filter(Boolean)),
   ].filter(Boolean));
 
   // --- swipe actions behind the row
@@ -627,10 +634,20 @@ function taskRow(task) {
       onclick: () => mutate(cell, task.id, fields, failMsg, undo),
     }, [icon(path, { size: 19, width: 1.9 }), label]);
 
+  // Edit is a swipe action too, not just a tap. Tapping a row is the iOS
+  // convention but it is invisible, and a named button is the one way a person
+  // finds a feature they are actively looking for.
+  const editBtn = el('button', {
+    class: 'edit',
+    type: 'button',
+    onclick: () => { cell.classList.remove('open'); openDetail(task.id); },
+  }, [icon('M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l4 4', { size: 19, width: 1.9 }), 'Edit']);
+
   const actions = isDone
     ? [swipeBtn('undo', 'Reopen', 'M4 10h10a5 5 0 1 1-5 5M4 10l4-4M4 10l4 4',
         { status: 'open' }, 'Could not reopen')]
     : [
+        editBtn,
         swipeBtn('snooze', 'Tomorrow', 'M12 7v5l3 2M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z',
           { status: 'snoozed', snooze_until: tomorrow8() }, 'Could not snooze',
           { message: `Snoozed · ${short(task.title)}`, fields: { status: 'open', snooze_until: null } }),

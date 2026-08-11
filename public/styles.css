@@ -487,7 +487,11 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 /* Priority score, right-aligned like an iOS accessory view. A tinted pill in
    the bucket's colour reads faster than a grey number beside a dot, and the
    number is still there for anyone who wants the actual value. */
-.row .acc { flex: none; display: flex; align-items: center; padding-top: 2px; }
+.row .acc { flex: none; display: flex; align-items: center; gap: 2px; padding-top: 2px; }
+
+/* The disclosure chevron. Grey and small — it says "there is more here" without
+   competing with the score for attention. */
+.row .chev { color: var(--label-3); display: grid; place-items: center; }
 .row .score {
   font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
   /* Same trick as the overdue label: keep the hue, borrow enough of the label
@@ -510,6 +514,7 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   width: 68px; display: grid; place-items: center; gap: 3px;
   color: #fff; font-size: 11px; font-weight: 500;
 }
+.swipe .edit   { background: var(--label-2); } /* neutral: it destroys nothing */
 .swipe .snooze { background: var(--orange); }
 .swipe .drop   { background: var(--red); }
 .swipe .undo   { background: var(--blue); }
