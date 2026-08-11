@@ -630,6 +630,44 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
 .tabbar button svg { width: 25px; height: 25px; transition: translate .2s var(--ease), scale .2s var(--ease); }
 .tabbar button.on svg { translate: 0 -1px; scale: 1.06; }
 
+/* ------------------------------------------------------- the refresh pill */
+
+/* Above the tab bar rather than below the nav bar. The header is tall when
+   unscrolled and short when scrolled, so anything pinned under it either covers
+   the title or floats in space; down here it is clear of content at every
+   scroll position, and within thumb reach on a phone. */
+.refresh-pill {
+  position: fixed; bottom: calc(70px + env(safe-area-inset-bottom));
+  left: 50%; translate: -50% 0;
+  z-index: 35;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 15px; border-radius: 999px;
+  background: var(--tint); color: var(--on-tint);
+  font-size: 13px; font-weight: 650;
+  box-shadow: 0 6px 20px -6px var(--tint);
+  animation: drop-in .3s var(--ease) both;
+}
+.refresh-pill:active { scale: .96; }
+@keyframes drop-in { from { opacity: 0; translate: -50% 10px; } }
+
+/* The toast lives in the same corner of the screen. When the pill is up, the
+   toast steps over it rather than landing on top of it. */
+body:has(#refresh-pill:not([hidden])) .toast {
+  bottom: calc(124px + env(safe-area-inset-bottom));
+}
+
+/* A newly arrived row flashes once in the accent colour, so a list that
+   changed while you were looking at it does not do so silently. */
+.cell.fresh { animation: flash-new 1.6s var(--ease); }
+@keyframes flash-new {
+  0%, 15% { background: color-mix(in srgb, var(--tint) 22%, transparent); }
+  100%    { background: transparent; }
+}
+
+/* The "Updated 14:32" line doubles as a manual refresh, so there is always a
+   way to force one even if the event stream never connected. */
+.subtitle { cursor: pointer; }
+
 /* ------------------------------------------------------------------ toast */
 
 /* Small floating capsule, iOS-style, above the tab bar. */

@@ -20,6 +20,7 @@ const transcriber = require('./transcribe');
 const { periodSummary, gameStats, xpForTask } = require('./stats');
 const { parsePeriod, renderSummary, PERIOD_EXAMPLES } = require('./summary');
 const { describeRule, completeTask } = require('./recurrence');
+const events = require('./events');
 const { createLogger } = require('./log');
 
 const log = createLogger('telegram');
@@ -334,6 +335,7 @@ async function handleCommand(chatId, user, text) {
       if (note) {
         const updated = await dbModule.addProgress(user.id, id, note);
         const n = (updated.progress || []).length;
+        events.emit(user.id, { type: 'tasks-changed' });
         await send(chatId, `📝 Step ${n} logged on <b>#${id}</b> ${esc(task.title)}`);
         return;
       }
@@ -475,6 +477,12 @@ async function handleCommand(chatId, user, text) {
       const task = await dbModule.getTask(user.id, id);
       if (!task) return void (await send(chatId, `No task #${id}.`));
 
+      // Whatever this command does, the dashboard's copy is about to be stale.
+      // Creating a task announces itself from db.insertTasks; changing one has
+      // to say so here, because the browser that is looking at it did not make
+      // the change.
+      const announce = () => events.emit(user.id, { type: 'tasks-changed' });
+
       if (cmd === '/done') {
         // The shared path, so a recurring chore comes back whether you tick it
         // off here or in the dashboard.
@@ -483,6 +491,7 @@ async function handleCommand(chatId, user, text) {
         const again = next
           ? `\n🔁 Next one: <b>#${next.id}</b> ${esc(new Date(next.due_at).toDateString())}`
           : '';
+        announce();
         await send(
           chatId,
           `✅ Done: ${esc(task.title)}\n⚡ +${xpForTask(task)} XP · 🔥 ${g.streak}-day streak${again}`
@@ -491,6 +500,7 @@ async function handleCommand(chatId, user, text) {
         // 'dropped' rather than deleted: the task stays for auditing what the
         // extractor got wrong.
         await dbModule.updateTaskFields(user.id, id, { status: 'dropped' });
+        announce();
         await send(chatId, `🗑 Dropped: ${esc(task.title)}`);
       } else {
         // Tomorrow at 08:00 local. setHours(8,0,0,0) zeroes minutes/seconds/ms.
@@ -498,6 +508,7 @@ async function handleCommand(chatId, user, text) {
         tomorrow.setDate(tomorrow.getDate() + 1); // rolls over months correctly
         tomorrow.setHours(8, 0, 0, 0);
         await dbModule.updateTaskFields(user.id, id, { status: 'snoozed', snooze_until: tomorrow.getTime() });
+        announce();
         await send(chatId, `😴 Snoozed until tomorrow 8am: ${esc(task.title)}`);
       }
       return;

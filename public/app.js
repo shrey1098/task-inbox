@@ -678,6 +678,13 @@ function rowsOf(tasks) {
   return tasks.map((task, i) => {
     const cell = taskRow(task);
     cell.style.setProperty('--i', String(Math.min(i, MAX_STAGGER)));
+    // A task that arrived over the live stream gets a one-off highlight, so a
+    // list that changed while you were looking at it does not do so silently.
+    if (freshIds.has(task.id)) {
+      cell.classList.add('fresh');
+      // Consumed on first paint — it should flash once, not on every render.
+      freshIds.delete(task.id);
+    }
     return cell;
   });
 }
@@ -1074,6 +1081,7 @@ async function refresh() {
     state.game = game;
     state.people = people;
     render();
+    hideRefreshPill(); // whatever prompted this, the view is now current
     $('#synced').textContent = `Updated ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
   } catch (err) {
     $('#synced').textContent = 'Not connected';
@@ -1148,7 +1156,14 @@ async function openDetail(id) {
       el('button', { class: 'linkish', type: 'button', onclick: () => save({ dup_of: null }, { reopen: true }) }, 'Not a duplicate'),
     ]) : null,
 
+    // --- the progress log, first among the sections.
+    // It is what you came to the sheet for on any task that is already under
+    // way: to see where you got to, and to add the next step. The fields below
+    // are corrections to the extraction, which is a rarer errand.
+    progressBlock(task, id, save),
+
     // --- the editable fields
+    el('h3', { class: 'sheet-head' }, 'Details'),
     el('div', { class: 'group' }, [
       field('Due', el('input', {
         type: 'datetime-local',
@@ -1204,9 +1219,6 @@ async function openDetail(id) {
         el('span', { class: 'k' }, 'Summary'), el('span', { class: 'v' }, `🔁 ${task.repeat_text}`),
       ]) : null,
     ].filter(Boolean)),
-
-    // --- the progress log
-    progressBlock(task, id, save),
 
     // --- notes
     el('h3', { class: 'sheet-head' }, 'Notes'),
@@ -1804,10 +1816,95 @@ $('#compose-text').addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('#compose-submit').click();
 });
 
+/* ------------------------------------------------------------ live updates */
+
+/*
+ * The app does not poll.
+ *
+ * It used to refetch everything every 15 seconds, which is wasted work when
+ * nothing has happened (almost always) and still up to 15 seconds late when
+ * something has. Instead the server holds one Server-Sent Events connection
+ * open and says what happened, the moment it happens.
+ *
+ * The two cases are treated differently on purpose:
+ *
+ *   tasks-added    A task arrived — almost always something you just forwarded
+ *                  to the bot and are waiting to see. Pull it in immediately;
+ *                  making you press a button to see the thing you just sent
+ *                  would be silly.
+ *
+ *   tasks-changed  Something moved that you did not do here: /done from the
+ *                  phone, a snooze from the bot. Refetching under your finger
+ *                  while you are reading the list is worse than being slightly
+ *                  stale, so this offers a button and waits.
+ */
+let stream;
+let pendingChanges = false;
+
+function connectStream() {
+  // EventSource reconnects by itself after a drop, with its own backoff, so
+  // there is no retry logic to write here.
+  stream = new EventSource('/api/events');
+
+  stream.addEventListener('message', (e) => {
+    let payload;
+    try { payload = JSON.parse(e.data); } catch { return; }
+
+    if (payload.type === 'tasks-added') {
+      // Remember which ids are new so the rows can be highlighted once drawn.
+      for (const id of payload.ids || []) freshIds.add(id);
+      refresh();
+      const n = (payload.ids || []).length;
+      toast(n === 1 ? 'New task added' : `${n} new tasks added`);
+    } else if (payload.type === 'tasks-changed') {
+      showRefreshPill();
+    }
+  });
+
+  stream.addEventListener('error', () => {
+    // Fires on every disconnect, including the ones EventSource is about to
+    // recover from on its own. Only worth reacting to when it has given up.
+    if (stream.readyState === EventSource.CLOSED) {
+      $('#synced').textContent = 'Reconnecting…';
+      setTimeout(connectStream, 5000);
+    }
+  });
+}
+
+/** Ids that arrived while you were looking, so their rows can flash once. */
+const freshIds = new Set();
+
+/** The "something changed" button. Nothing refetches until it is pressed. */
+function showRefreshPill() {
+  if (pendingChanges) return; // already offered
+  pendingChanges = true;
+  $('#refresh-pill').hidden = false;
+}
+
+function hideRefreshPill() {
+  pendingChanges = false;
+  $('#refresh-pill').hidden = true;
+}
+
+$('#refresh-pill').addEventListener('click', () => {
+  hideRefreshPill();
+  refresh();
+});
+
+// The "Updated 14:32" line is also a refresh button, so there is always a way
+// to force one even if the stream never connected.
+$('#synced').addEventListener('click', () => { hideRefreshPill(); refresh(); });
+
 /* --------------------------------------------------------------- lifecycle */
 
 refresh();
-setInterval(refresh, 15000);
-// Refresh on returning to the tab rather than showing whatever was on screen
-// when you left.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+connectStream();
+
+// Coming back to the tab is a deliberate act, and the stream may have missed
+// events while the page was frozen in the background — so this one refetch
+// stays. It is not a timer.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  hideRefreshPill();
+  refresh();
+});

@@ -95,6 +95,16 @@
     <p class="list-footer" id="list-footer"></p>
   </main>
 
+  <!-- Appears only when the server says something changed that this tab did
+       not do. Nothing is refetched until it is pressed. -->
+  <button class="refresh-pill" id="refresh-pill" type="button" hidden>
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M20 11a8 8 0 1 0-2.3 6M20 5v6h-6"/>
+    </svg>
+    Tap to update
+  </button>
+
   <!-- Four tabs. Inbox is the list; Calendar is the same tasks by deadline;
        People groups them by who asked; Done is the archive. -->
   <nav class="tabbar" id="tabbar">

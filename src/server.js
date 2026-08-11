@@ -18,6 +18,7 @@ const { bucketOf, explainScore, rescoreOpenTasks, scoreTask, rankRequester } = r
 const { describeRule, normaliseRule, completeTask } = require('./recurrence');
 const { gameStats, periodSummary, xpForTask } = require('./stats');
 const { parsePeriod } = require('./summary');
+const events = require('./events');
 const auth = require('./auth');
 const { createLogger, colorize, dim } = require('./log');
 
@@ -415,6 +416,49 @@ function createApp() {
     // sheet handles by simply not showing a source section.
     const [created] = await dbModule.insertTasks(req.user.id, null, [spec]);
     res.status(201).json(decorate(created, Date.now()));
+  });
+
+  /* --------------------------------------------------------- the push channel */
+
+  /**
+   * GET /api/events — a Server-Sent Events stream for this account.
+   *
+   * The dashboard opens one of these and stops polling. Everything it needs to
+   * know ("a task arrived", "something changed elsewhere") arrives here within
+   * milliseconds instead of on a fifteen-second timer.
+   */
+  api.get('/events', (req, res) => {
+    res.set({
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache, no-transform', // no-transform stops a proxy buffering it
+      connection: 'keep-alive',
+      // Nginx in particular buffers responses by default, which would hold
+      // every event until the connection closed — i.e. forever.
+      'x-accel-buffering': 'no',
+    });
+    // Send the headers now rather than waiting for the first write, so the
+    // browser's EventSource fires `open` immediately.
+    res.flushHeaders();
+    // A comment line (": …") is ignored by the client but proves the stream is
+    // alive and flushes any remaining buffer in front of us.
+    res.write(': connected\n\n');
+
+    const unsubscribe = events.subscribe(req.user.id, res);
+    log.info(`sse open for #${req.user.id} (${events.countFor(req.user.id)} tab(s))`);
+
+    // Heartbeat. Idle connections get closed by proxies, phone radios and load
+    // balancers after a minute or two; a comment every 25 seconds is cheap and
+    // keeps the path warm. EventSource would reconnect anyway, but a reconnect
+    // storm from every sleeping phone is worth avoiding.
+    const beat = setInterval(() => res.write(': beat\n\n'), 25000);
+
+    // 'close' fires when the browser goes away — tab closed, navigation, or a
+    // dropped network. Without this the interval and the subscriber leak.
+    req.on('close', () => {
+      clearInterval(beat);
+      unsubscribe();
+      log.debug(`sse closed for #${req.user.id}`);
+    });
   });
 
   /* -------------------------------------------------------- the progress log */

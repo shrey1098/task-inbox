@@ -24,6 +24,7 @@
 
 const { MongoClient } = require('mongodb');
 const config = require('./config');
+const events = require('./events');
 
 // Module-level handles. They start undefined and are filled in by connect().
 // Because Node caches modules, every file that requires './db' shares these —
@@ -265,7 +266,14 @@ async function insertTasks(userId, messageId, tasks) {
   }
 
   // insertMany rejects an empty array, hence the guard.
-  if (docs.length > 0) await db.collection('tasks').insertMany(docs);
+  if (docs.length > 0) {
+    await db.collection('tasks').insertMany(docs);
+    // Tell any open dashboard immediately. This lives here rather than at the
+    // three call sites (the extractor, a manual add, a spawned recurrence)
+    // because this is the one chokepoint every new task passes through — a
+    // future fourth path cannot forget to announce itself.
+    events.emit(userId, { type: 'tasks-added', ids: docs.map((d) => d.id) });
+  }
   return docs;
 }
 
