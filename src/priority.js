@@ -48,11 +48,11 @@ function clamp(n, lo, hi) {
  *
  * Two mechanisms, because a bonus alone would not do it:
  *   • AUTHORITY_BONUS adds points, so seniority still orders within the group.
- *   • AUTHORITY_FLOOR is a minimum score, so such a task lands in "Now"
+ *   • AUTHORITY_FLOOR is a minimum score, so such a task lands in P1
  *     whatever the deadline arithmetic produced.
  *
- * The floor is 70 — exactly the "now" bucket threshold — so the rule reads as
- * "the boss's asks are always Now", with the bonus then ranking them among
+ * The floor is 70 — exactly the P1 threshold — so the rule reads as "the
+ * boss's asks are always P1", with the bonus then ranking them among
  * themselves by urgency and deadline as usual.
  */
 const AUTHORITY_BONUS = 18;
@@ -136,11 +136,27 @@ function scoreTask(task, now = Date.now()) {
   return Math.round(final * 10) / 10;
 }
 
-/** Which dashboard column a score lands in. */
+/*
+ * Priority bands.
+ *
+ * P1 / P2 / P3 rather than adjectives, because the labels have to survive
+ * being said out loud ("that's a P1") and because a number implies a rank in a
+ * way that "Soon" does not — nobody argues about whether P1 outranks P2.
+ *
+ * The thresholds are where they are because the authority floor is 70: a
+ * senior's request is meant to land in P1 by definition, so the P1 boundary
+ * and the floor are deliberately the same number.
+ */
+const BANDS = [
+  { key: 'p1', min: 70, name: 'P1', hint: 'Do now' },
+  { key: 'p2', min: 45, name: 'P2', hint: 'This week' },
+  { key: 'p3', min: 0,  name: 'P3', hint: 'Whenever' },
+];
+
+/** Which priority band a score lands in. */
 function bucketOf(score) {
-  if (score >= 70) return 'now';
-  if (score >= 45) return 'soon';
-  return 'later';
+  // Ordered high to low, so the first match is the right one.
+  return BANDS.find((b) => score >= b.min).key;
 }
 
 /**
@@ -152,7 +168,7 @@ function explainScore(task, now = Date.now()) {
   const importance = clamp(task.importance ?? 3, 1, 5);
   const parts = [];
   // Listed first because it is the reason that overrides all the others.
-  if (isFromSenior(task)) parts.push(`from ${task.requester || 'a senior'} — always Now`);
+  if (isFromSenior(task)) parts.push(`from ${task.requester || 'a senior'} — always P1`);
   parts.push(`urgency ${urgency}/5`, `importance ${importance}/5`);
   if (task.waiting_on) parts.push('waiting on someone else');
 
@@ -222,6 +238,7 @@ async function rescoreOpenTasks(dbModule, now = Date.now()) {
 module.exports = {
   scoreTask,
   bucketOf,
+  BANDS,
   explainScore,
   rescoreOpenTasks,
   formatMinutes,

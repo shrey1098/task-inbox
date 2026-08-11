@@ -15,7 +15,7 @@
 const config = require('./config');
 const dbModule = require('./db');
 const { processMessage } = require('./extractor');
-const { explainScore } = require('./priority');
+const { explainScore, bucketOf } = require('./priority');
 const transcriber = require('./transcribe');
 const { periodSummary, gameStats, xpForTask } = require('./stats');
 const { parsePeriod, renderSummary, PERIOD_EXAMPLES } = require('./summary');
@@ -23,6 +23,24 @@ const { describeRule, completeTask } = require('./recurrence');
 const { createLogger } = require('./log');
 
 const log = createLogger('telegram');
+
+/**
+ * A task's priority band as a coloured tag: "🔴 P1".
+ *
+ * The band is computed from the score rather than read off the task, because a
+ * document straight out of the database has no `bucket` — that field is
+ * derived, and only the HTTP layer adds it.
+ *
+ * The emoji is not decoration: Telegram offers no colour control, so a coloured
+ * circle is the only way to tell the bands apart at a glance in a wall of text.
+ * The letters still carry the meaning for anyone who cannot distinguish them.
+ */
+const BAND_DOT = { p1: '🔴', p2: '🟠', p3: '🟢' };
+
+function bandOf(task) {
+  const band = task.bucket || bucketOf(task.score ?? 0);
+  return `${BAND_DOT[band] || '⚪️'} <b>${band.toUpperCase()}</b>`;
+}
 
 /** A ten-cell text progress bar: ▓▓▓▓▓░░░░░ — readable in any Telegram font. */
 function progressBar(fraction, width = 10) {
@@ -354,7 +372,7 @@ async function handleCommand(chatId, user, text) {
         const exists = settings.seniors.some((s) => s.toLowerCase() === name.toLowerCase());
         const seniors = exists ? settings.seniors : [...settings.seniors, name];
         await dbModule.updateUser(user.id, { settings: { ...settings, seniors } });
-        await send(chatId, `⭐️ <b>${esc(name)}</b>’s requests will now always rank as Now.`);
+        await send(chatId, `⭐️ <b>${esc(name)}</b>’s requests will now always rank as P1.`);
         return;
       }
       if ((action === 'remove' || action === 'rm') && name) {
@@ -369,7 +387,7 @@ async function handleCommand(chatId, user, text) {
         settings.seniors.length
           ? ['<b>Always top priority</b>', ...settings.seniors.map((s) => `⭐️ ${esc(s)}`),
              '', 'Add with <code>/seniors add NAME</code>.'].join('\n')
-          : 'Nobody set yet. Add one with <code>/seniors add CO</code> — their requests will always rank as Now, whatever the deadline says.'
+          : 'Nobody set yet. Add one with <code>/seniors add CO</code> — their requests will always rank as P1, whatever the deadline says.'
       );
       return;
     }
@@ -382,7 +400,7 @@ async function handleCommand(chatId, user, text) {
       // "reply and return" on one line.
       if (tasks.length === 0) return void (await send(chatId, 'No open tasks. 🎉'));
       const lines = tasks.map(
-        (t) => `<b>#${t.id}</b> [${Math.round(t.score)}] ${esc(t.title)}${t.due_text ? ` — <i>${esc(t.due_text)}</i>` : ''}`
+        (t) => `${bandOf(t)} <b>#${t.id}</b> ${esc(t.title)}${t.due_text ? ` — <i>${esc(t.due_text)}</i>` : ''}`
       );
       await send(chatId, lines.join('\n'));
       return;
@@ -584,14 +602,14 @@ async function handleMessage(msg) {
     // plus flags for the things that change how a task behaves.
     const lines = tasks.map((t) => {
       const flags = [
-        t.requester_rank === 'senior' ? '⭐️ from a senior — pinned to Now' : null,
+        t.requester_rank === 'senior' ? '⭐️ from a senior — pinned to P1' : null,
         t.recurrence ? `🔁 ${esc(describeRule(t.recurrence))}` : null,
         t.waiting_on ? '⏳ waiting on someone else' : null,
         t.dup_of ? `♻️ looks like #${t.dup_of} — check before doing both` : null,
       ].filter(Boolean);
 
       return [
-        `📌 <b>#${t.id}</b> ${esc(t.title)}`,
+        `${bandOf(t)} <b>#${t.id}</b> ${esc(t.title)}`,
         `<i>${esc(explainScore(t))} → score ${Math.round(t.score)}</i>`,
         ...flags,
       ].join('\n');

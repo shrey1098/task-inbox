@@ -1,6 +1,6 @@
 # Task Inbox
 
-Forward WhatsApp messages that need action to a Telegram bot → Claude extracts the task(s), estimates urgency/importance/effort and resolves deadlines → tasks land in MongoDB with a deterministic priority score → an iOS-style web app shows them as **Now / Soon / Later**.
+Forward WhatsApp messages that need action to a Telegram bot → Claude extracts the task(s), estimates urgency/importance/effort and resolves deadlines → tasks land in MongoDB with a deterministic priority score → an iOS-style web app shows them as **P1 / P2 / P3**.
 
 Multi-user: each person signs in with their own account, links their own Telegram chat, and sees only their own tasks.
 
@@ -106,7 +106,7 @@ Claude only judges the *content*: urgency (1–5), importance (1–5), effort, d
 - urgency → up to 30 pts, importance → up to 30 pts
 - deadline pressure → up to 30 pts (overdue = max; grows as the deadline nears)
 - quick-win bonus (≤15 min) and a small staleness nudge so old tasks resurface
-- **authority**: +18 pts and a **floor of 70** for anyone on your seniors list
+- **authority**: +18 pts and a **floor of 70** for anyone on your seniors list — the floor is exactly the P1 threshold, so their asks are P1 by definition
 - **waiting on someone**: −12 pts, and the authority floor does not apply — you cannot finish those by working harder
 
 Because scoring is local, ranks stay explainable, deadlines "heat up" without extra API calls, and you can tune the weights in `src/priority.js`.
@@ -114,7 +114,7 @@ Because scoring is local, ranks stay explainable, deadlines "heat up" without ex
 ### The seniors list
 
 Add a name (`CO`, `Col. Mehta`) in the Account sheet or with `/seniors add CO`.
-Anything they ask for is pinned to **Now** regardless of its timeline, and the
+Anything they ask for is pinned to **P1** regardless of its timeline, and the
 tasks they already asked for are re-ranked immediately — not just future ones.
 Matching is case-insensitive and works on partial names in both directions, so
 `CO` also catches "the CO".

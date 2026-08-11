@@ -93,19 +93,19 @@ check('the next occurrence inherits judgement but not history', () => {
 
 /* --------------------------------------------------------------- priority */
 
-check('a senior’s request is pinned to Now with no deadline at all', () => {
+check('a senior’s request is pinned to P1 with no deadline at all', () => {
   const base = { urgency: 1, importance: 1, due_at: null, created_at: MON };
   const ordinary = scoreTask({ ...base, requester_rank: 'peer' }, MON);
   const fromBoss = scoreTask({ ...base, requester_rank: 'senior' }, MON);
-  assert.ok(ordinary < 45, `an ordinary trivial task should be Later, got ${ordinary}`);
+  assert.ok(ordinary < 45, `an ordinary trivial task should be P3, got ${ordinary}`);
   assert.ok(fromBoss >= 70, `a senior’s should hit the floor, got ${fromBoss}`);
-  assert.strictEqual(bucketOf(fromBoss), 'now');
+  assert.strictEqual(bucketOf(fromBoss), 'p1');
 });
 
 check('a senior’s request still outranks a same-day errand', () => {
   const errand = scoreTask({ urgency: 3, importance: 2, due_at: MON + 3600e3, created_at: MON }, MON);
   const boss = scoreTask({ urgency: 1, importance: 1, due_at: null, requester_rank: 'senior', created_at: MON }, MON);
-  assert.ok(boss >= 70 && bucketOf(errand) !== 'now' || boss > errand - 20,
+  assert.ok(boss >= 70 && bucketOf(errand) !== 'p1' || boss > errand - 20,
     `boss ${boss} vs errand ${errand}`);
   assert.ok(boss >= 70);
 });

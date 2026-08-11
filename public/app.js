@@ -40,9 +40,9 @@ const CATEGORY_KEYS = Object.keys(CATEGORY);
 
 // Bucket → label and colour. Order matters: it drives the segmented control.
 const BUCKETS = {
-  now:   { name: 'Now',   color: 'var(--now)' },
-  soon:  { name: 'Soon',  color: 'var(--soon)' },
-  later: { name: 'Later', color: 'var(--later)' },
+  p1: { name: 'P1', hint: 'Do now',    color: 'var(--p1)' },
+  p2: { name: 'P2', hint: 'This week', color: 'var(--p2)' },
+  p3: { name: 'P3', hint: 'Whenever',  color: 'var(--p3)' },
 };
 
 // Width of one swipe action button; must match .swipe button in the stylesheet.
@@ -57,7 +57,7 @@ const SWIPE_BTN_W = 68;
  */
 const MOODS = [
   { key: 'late',  when: (c) => c.overdue > 0, hero: ['--red', '--orange'],  amb: ['--red', '--orange', '--pink'] },
-  { key: 'now',   when: (c) => c.now > 0,     hero: ['--orange', '--pink'], amb: ['--orange', '--pink', '--purple'] },
+  { key: 'p1',    when: (c) => c.p1 > 0,      hero: ['--orange', '--pink'], amb: ['--orange', '--pink', '--purple'] },
   { key: 'busy',  when: (c) => c.open > 0,    hero: ['--blue', '--indigo'], amb: ['--blue', '--purple', '--teal'] },
   { key: 'clear', when: () => true,           hero: ['--green', '--teal'],  amb: ['--green', '--teal', '--blue'] },
 ];
@@ -78,7 +78,7 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
 
 const state = {
   tab: 'inbox',      // 'inbox' | 'calendar' | 'people' | 'done'
-  filter: 'all',     // 'all' | 'now' | 'soon' | 'later'
+  filter: 'all',     // 'all' | 'p1' | 'p2' | 'p3'
   open: [],
   done: [],
   game: null,        // level / xp / streak, from /api/game
@@ -685,7 +685,7 @@ function rowsOf(tasks) {
 function renderHero() {
   const counts = {
     open: state.open.length,
-    now: state.open.filter((t) => t.bucket === 'now').length,
+    p1: state.open.filter((t) => t.bucket === 'p1').length,
     overdue: state.open.filter((t) => t.overdue).length,
   };
   const mood = applyMood(counts);
@@ -731,7 +731,7 @@ function renderHero() {
         ]),
         el('div', { class: 'chips' }, [
           counts.overdue ? el('span', { class: 'hot' }, `${counts.overdue} overdue`) : null,
-          counts.now ? el('span', {}, `${counts.now} urgent`) : null,
+          counts.p1 ? el('span', {}, `${counts.p1} in P1`) : null,
           el('span', {}, `${counts.open} open`),
         ].filter(Boolean)),
         next ? el('div', { class: 'next', title: next.title }, [
@@ -820,6 +820,9 @@ function renderInbox() {
       el('div', { class: 'section-head' }, [
         el('span', { class: 'dot', style: `--c:${BUCKETS[key].color}` }),
         BUCKETS[key].name,
+        // "P1" alone is a label you have to learn. The hint says what the band
+        // means without turning the header back into an adjective.
+        el('span', { class: 'hint' }, BUCKETS[key].hint),
         el('span', { class: 'count' }, String(group.length)),
       ]),
       el('div', { class: 'list' }, rowsOf(group))
@@ -979,9 +982,9 @@ function renderPeople() {
 
 /** Mirror of priority.js's bucketOf, for values the server sent us raw. */
 function bucketOfScore(score) {
-  if (score >= 70) return 'now';
-  if (score >= 45) return 'soon';
-  return 'later';
+  if (score >= 70) return 'p1';
+  if (score >= 45) return 'p2';
+  return 'p3';
 }
 
 function initials(name) {

@@ -332,9 +332,9 @@ async function check(name, fn) {
 
     const after = await alice(`/api/tasks/${t.body.id}`);
     assert.strictEqual(after.body.requester_rank, 'senior');
-    // The floor is the whole point: no deadline, minimum urgency, still Now.
+    // The floor is the whole point: no deadline, minimum urgency, still P1.
     assert.ok(after.body.score >= 70, `expected the authority floor, got ${after.body.score}`);
-    assert.strictEqual(after.body.bucket, 'now');
+    assert.strictEqual(after.body.bucket, 'p1');
   });
 
   await check('settings are validated, not trusted', async () => {
@@ -355,7 +355,7 @@ async function check(name, fn) {
     const t = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({
       title: 'Fetch the stationery', requester: 'Boss', urgency: 1, importance: 1,
     }) });
-    assert.ok(t.body.score >= 70, 'a senior’s task starts pinned to Now');
+    assert.ok(t.body.score >= 70, 'a senior’s task starts pinned to P1');
 
     await alice('/api/settings', { method: 'PUT', body: JSON.stringify({ seniors: ['Col. Mehta'] }) });
     const after = await alice(`/api/tasks/${t.body.id}`);

@@ -52,11 +52,11 @@
   --tint: var(--blue);        /* the app's accent — iOS calls this the tint */
   --on-tint: #ffffff;
 
-  /* Priority. Red/orange/green is the conventional severity ramp; each is
-     always paired with a text label, never colour alone. */
-  --now:   var(--red);
-  --soon:  var(--orange);
-  --later: var(--green);
+  /* Priority bands. Red/orange/green is the conventional severity ramp; each
+     is always paired with the band's name in text, never colour alone. */
+  --p1: var(--red);
+  --p2: var(--orange);
+  --p3: var(--green);
 
   /* How strongly cards separate from the page. Cards are translucent so the
      ambient gradient shows through — that is what stops the UI reading flat. */
@@ -301,6 +301,8 @@ main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
   background: var(--c);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 20%, transparent);
 }
+/* The band's meaning, sitting quietly next to its name. */
+.section-head .hint { font-weight: 400; color: var(--label-3); }
 .section-head .count {
   margin-left: auto; font-variant-numeric: tabular-nums;
   background: var(--bg-tint); color: var(--label-2);
