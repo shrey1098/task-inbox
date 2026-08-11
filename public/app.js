@@ -325,6 +325,22 @@ function shortDuration(ms) {
   return `${Math.round(abs / DAY)}d`;
 }
 
+/**
+ * Shorten a task title for a toast.
+ *
+ * A toast is a glance, not a record — you already know what you just swiped,
+ * so it only has to be enough to recognise. Breaking on a word boundary rather
+ * than mid-word keeps the fragment readable ("Pay the flat…" beats "Pay the fl…").
+ */
+function short(text, max = 24) {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  // Only honour the word boundary if it isn't so early that we lose the sense.
+  return `${lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut.trimEnd()}…`;
+}
+
 function exactTime(ts) {
   return new Date(ts).toLocaleString(undefined, {
     weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -419,7 +435,7 @@ async function completeTask(cell, check, task) {
 
   const result = await mutate(
     cell, task.id, { status: 'done' }, 'Could not complete',
-    { message: `Done: ${task.title}`, fields: { status: 'open', completed_at: null } }
+    { message: `Done · ${short(task.title)}`, fields: { status: 'open', completed_at: null } }
   );
   if (!result) return;
 
@@ -617,10 +633,10 @@ function taskRow(task) {
     : [
         swipeBtn('snooze', 'Tomorrow', 'M12 7v5l3 2M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z',
           { status: 'snoozed', snooze_until: tomorrow8() }, 'Could not snooze',
-          { message: `Snoozed: ${task.title}`, fields: { status: 'open', snooze_until: null } }),
+          { message: `Snoozed · ${short(task.title)}`, fields: { status: 'open', snooze_until: null } }),
         swipeBtn('drop', 'Drop', 'M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13',
           { status: 'dropped' }, 'Could not drop',
-          { message: `Dropped: ${task.title}`, fields: { status: 'open' } }),
+          { message: `Dropped · ${short(task.title)}`, fields: { status: 'open' } }),
       ];
 
   const openW = actions.length * SWIPE_BTN_W;
@@ -1180,14 +1196,14 @@ async function openDetail(id) {
         try {
           const r = await api(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
           if (r.game) state.game = r.game;
-          toast(`Done: ${task.title}`, { label: 'Undo', run: () => save({ status: 'open', completed_at: null }) });
+          toast(`Done · ${short(task.title)}`, { label: 'Undo', run: () => save({ status: 'open', completed_at: null }) });
           refresh();
         } catch (err) { toast(`Could not complete: ${err.message}`); }
       } }, task.status === 'done' ? 'Completed' : 'Mark done'),
       el('button', { class: 'btn-plain btn-danger', type: 'button', onclick: async () => {
         closeAllSheets();
         await save({ status: 'dropped' });
-        toast(`Dropped: ${task.title}`, { label: 'Undo', run: () => save({ status: 'open' }) });
+        toast(`Dropped · ${short(task.title)}`, { label: 'Undo', run: () => save({ status: 'open' }) });
       } }, 'Drop this task'),
       el('button', { class: 'btn-plain', type: 'button', onclick: closeAllSheets }, 'Close'),
     ]),
