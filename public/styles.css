@@ -691,34 +691,37 @@ main {
 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  max-width: 560px; margin: 0 auto;
+  max-width: 560px; margin-inline: auto;
   display: flex;
-  /* Just enough to clear the home indicator, not the whole reserved strip —
-     see --safe-b. The bar's background still runs to the physical bottom
-     edge; this only sets how far above it the labels sit. */
-  padding-bottom: var(--safe-b);
+  /* The bar is anchored at bottom: 0, which on Chrome puts its box exactly on
+     the bottom of the screen. On the installed iOS app it does not get all
+     the way there, and the strip it leaves over the home indicator shows the
+     page through — the ambient gradient sits at 92% height, so that band
+     reads as a blue stripe under the bar.
+
+     So the box is deliberately overgrown: --bleed of extra bottom padding
+     pushes the background down past where the anchor lands, and an equal
+     negative bottom margin shifts the whole box down by the same amount so
+     the anchor still resolves to bottom: 0. The buttons do not move — the
+     growth is all padding below them — and where the bar was already flush,
+     the overhang falls off the bottom of the viewport and is clipped, so it
+     costs nothing on the platforms that were correct all along.
+
+     Growing the bar's own box, rather than parking a filler behind it, is
+     what makes the fill match: the band gets the real background AND the
+     real backdrop blur. A separate element would have to reproduce both, and
+     a translucent fill with no blur over that gradient is exactly the blue
+     stripe we are trying to remove.
+
+     --safe-b is the clearance above the home indicator: just the indicator,
+     not the whole reserved inset. It only sets how far up the labels sit. */
+  --bleed: 60px;
+  padding-bottom: calc(var(--safe-b) + var(--bleed));
+  margin-bottom: calc(-1 * var(--bleed));
   background: color-mix(in srgb, var(--bg-cell) 72%, transparent);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
   border-top: .5px solid var(--separator);
-}
-
-/* The bar is anchored at bottom: 0, so in principle its box already reaches
-   the bottom of the screen. On an installed iOS home-screen app it does not
-   always get there — the strip over the home indicator can be left showing
-   the page background, which in dark mode is a black band under the bar.
-   This bleeds the bar's own fill downwards past its box to cover whatever
-   that band is. If there is no band, it simply falls off the bottom of the
-   viewport and is clipped, so it costs nothing on the platforms that were
-   already correct. No backdrop-filter here: there is nothing behind this
-   strip to blur, and asking for one inside an already-filtered parent is
-   how you get a visible seam. */
-.tabbar::after {
-  content: "";
-  position: absolute; left: 0; right: 0;
-  top: 100%; height: 80px;
-  background: color-mix(in srgb, var(--bg-cell) 72%, transparent);
-  pointer-events: none;
 }
 .tabbar button {
   flex: 1; padding: 6px 0 3px;
