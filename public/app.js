@@ -92,6 +92,9 @@ const state = {
   searchResults: [],
   // People: the requester currently drilled into, or null for the list.
   person: undefined,
+  // Has a fetch ever succeeded? Distinguishes "offline from the start" from
+  // "briefly lost the connection", which deserve different screens.
+  loaded: false,
   // Combo tracking — the timestamp of the last completion.
   lastDone: 0,
   combo: 0,
@@ -1080,11 +1083,24 @@ async function refresh() {
     state.done = done;
     state.game = game;
     state.people = people;
+    state.loaded = true; // we have real data now, so never show the offline state again
     render();
     hideRefreshPill(); // whatever prompted this, the view is now current
     $('#synced').textContent = `Updated ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
   } catch (err) {
     $('#synced').textContent = 'Not connected';
+    // First load with no network: the service worker served the shell, but
+    // there is no data behind it. Skeleton rows would sit there for ever
+    // pretending something is coming, so say plainly what has happened.
+    if (!state.loaded) {
+      $('#hero').style.display = 'none';
+      $('#content').replaceChildren(emptyState(
+        'You’re offline',
+        'Your tasks will appear as soon as there is a connection.',
+        'var(--label-3), var(--label-3)'
+      ));
+      $('#list-footer').textContent = '';
+    }
     toast(`Can’t reach the server: ${err.message}`);
   } finally {
     inFlight = false;
@@ -1743,6 +1759,7 @@ function renderSettings() {
 $('#account-btn').addEventListener('click', () => {
   showSheet('#account-sheet', true);
   loadAccount();
+  renderInstall();
 });
 $('#account-cancel').addEventListener('click', closeAllSheets);
 
@@ -1894,6 +1911,85 @@ $('#refresh-pill').addEventListener('click', () => {
 // The "Updated 14:32" line is also a refresh button, so there is always a way
 // to force one even if the stream never connected.
 $('#synced').addEventListener('click', () => { hideRefreshPill(); refresh(); });
+
+/* --------------------------------------------------------- installable app */
+
+/*
+ * Service worker registration.
+ *
+ * Two things it buys: the app becomes installable (a home-screen icon that
+ * opens with no browser chrome), and a cold launch paints from cache instead
+ * of waiting on the network. It caches static files only — never API
+ * responses, which are one account's private data. See sw.js.
+ */
+if ('serviceWorker' in navigator) {
+  // After load, so registering never competes with the first paint.
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((reg) => {
+      // A new worker means a new deploy. Tell the user rather than swapping
+      // the code under them mid-action — the running page may have a sheet
+      // open and half-typed text in it.
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', () => {
+          // 'installed' with an existing controller = an update, not a first
+          // install. Without that check this fires on the very first visit.
+          if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+            toast('A new version is ready', { label: 'Reload', run: () => location.reload() });
+          }
+        });
+      });
+    }).catch((err) => {
+      // Not fatal: without a worker the app simply behaves like a normal site.
+      console.warn('service worker registration failed:', err.message);
+    });
+  });
+}
+
+/*
+ * The install prompt.
+ *
+ * Chrome fires beforeinstallprompt and lets you defer it; iOS Safari has no
+ * such API and requires Share → Add to Home Screen by hand. The account sheet
+ * shows whichever of those two applies, and nothing at all once installed.
+ */
+let installPrompt = null;
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); // stop Chrome's own mini-infobar; we have our own button
+  installPrompt = e;
+  renderInstall();
+});
+addEventListener('appinstalled', () => { installPrompt = null; renderInstall(); });
+
+/** True when running from the home screen rather than in a browser tab. */
+const isInstalled = () =>
+  matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function renderInstall() {
+  const host = $('#install-area');
+  if (!host) return;
+
+  if (isInstalled()) {
+    host.replaceChildren(el('p', { class: 'sheet-note' }, 'Installed. Enjoy.'));
+    return;
+  }
+  if (installPrompt) {
+    host.replaceChildren(el('button', {
+      class: 'btn-primary', type: 'button',
+      onclick: async () => {
+        installPrompt.prompt();
+        await installPrompt.userChoice;
+        installPrompt = null; // a prompt may only be used once
+        renderInstall();
+      },
+    }, 'Add to home screen'));
+    return;
+  }
+  // iOS, or a browser that has already dismissed the prompt.
+  host.replaceChildren(el('p', { class: 'sheet-note' },
+    'On iPhone: tap Share, then "Add to Home Screen". On Android: the browser menu, then "Install app".'));
+}
 
 /* --------------------------------------------------------------- lifecycle */
 

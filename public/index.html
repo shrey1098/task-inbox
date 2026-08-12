@@ -21,6 +21,13 @@
 <meta name="apple-mobile-web-app-title" content="Inbox">
 <title>Inbox</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📥</text></svg>">
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- iOS ignores the manifest's icons and uses this one. -->
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<!-- The browser/OS chrome colour. Two entries so the status bar matches
+     whichever theme the phone is in. -->
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -196,6 +203,9 @@
              autocapitalize="words" spellcheck="false">
       <button class="btn-add" id="senior-add" type="button">Add</button>
     </div>
+
+    <h3 class="sheet-head">Install</h3>
+    <div id="install-area"></div>
 
     <h3 class="sheet-head">Nudges</h3>
     <div class="group" id="settings-group"></div>

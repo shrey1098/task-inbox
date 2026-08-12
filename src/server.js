@@ -25,7 +25,15 @@ const { createLogger, colorize, dim } = require('./log');
 const log = createLogger('http');
 
 /** Files a signed-out visitor may load. Anything else redirects to the login. */
-const PUBLIC_FILES = new Set(['/login.html', '/login.js', '/styles.css', '/favicon.ico']);
+const PUBLIC_FILES = new Set([
+  '/login.html', '/login.js', '/styles.css', '/favicon.ico',
+  // The PWA files must be reachable while signed out. A manifest or a service
+  // worker that answers 302-to-login is not installable, and the browser gives
+  // no useful error when it happens.
+  '/manifest.webmanifest', '/sw.js',
+  '/icons/icon-192.png', '/icons/icon-512.png',
+  '/icons/maskable-512.png', '/icons/apple-touch-icon.png',
+]);
 
 /** Log one line per request: method, path, status, duration. */
 function requestLogger(req, res, next) {
@@ -218,7 +226,16 @@ function createApp() {
     return res.redirect('/login.html');
   });
 
-  app.use(express.static(path.join(config.rootDir, 'public'))); // 5. serve the app
+  app.use(express.static(path.join(config.rootDir, 'public'), {
+    setHeaders(res, filePath) {
+      // The service worker is the one file that must always be revalidated:
+      // browsers may cache it for up to 24 hours otherwise, and a phone would
+      // keep running an old version of the app long after a deploy.
+      if (filePath.endsWith('sw.js')) res.set('cache-control', 'no-cache');
+      // The icons never change without changing name, so let them sit.
+      else if (filePath.includes('/icons/')) res.set('cache-control', 'public, max-age=604800');
+    },
+  })); // 5. serve the app
 
   /* ------------------------------------------------------------ auth routes */
 
