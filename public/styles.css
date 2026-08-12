@@ -200,6 +200,13 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 #nav {
   position: sticky; top: 0; z-index: 30;
+  /* Installed to the home screen with viewport-fit=cover and a translucent
+     status bar, the page starts at the very top of the display — underneath
+     the clock and the battery. This is the padding that pushes the nav clear
+     of them. It is 0 in a normal browser tab, so it costs nothing there.
+     Everything else already handled the BOTTOM inset; this was the half that
+     only shows up once the app is actually installed. */
+  padding-top: env(safe-area-inset-top);
   /* The iOS translucent chrome: a heavily blurred, saturated backdrop so
      content tints the bar as it scrolls underneath. */
   background: color-mix(in srgb, var(--bg-grouped) 62%, transparent);
@@ -210,7 +217,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .nav-bar {
   height: var(--nav-h);
   display: flex; align-items: center; gap: 8px;
-  padding: 0 16px;
+  /* max() so the usual 16px still applies; the inset only wins in landscape on
+     a notched phone, where one side is physically obstructed. */
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
 
 /* The inline title appears only once the large title has scrolled away — the
@@ -234,7 +243,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .nav-spacer { margin-left: auto; }
 
 .large-title-wrap {
-  padding: 0 16px 6px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));
   transform-origin: left center;
   transition: opacity .2s var(--ease), translate .2s var(--ease);
 }
@@ -263,7 +272,8 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 /* iOS segmented control: a tinted track with a "thumb" that carries a small
    shadow and slides between segments. */
 .seg {
-  display: flex; gap: 2px; margin: 4px 16px 10px;
+  display: flex; gap: 2px;
+  margin: 4px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
   background: var(--bg-tint); border-radius: var(--r-ctl); padding: 2px;
   position: relative;
 }
@@ -286,7 +296,13 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 
 /* ------------------------------------------------------------------ main */
 
-main { padding: 0 16px calc(64px + env(safe-area-inset-bottom)); }
+main {
+  padding:
+    0
+    max(16px, env(safe-area-inset-right))
+    calc(64px + env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+}
 
 /* Section headers in grouped lists: small, grey, and inset to match the cells. */
 .section-head {
@@ -720,7 +736,8 @@ body:has(#refresh-pill:not([hidden])) .toast {
 
 .searchbar {
   display: flex; align-items: center; gap: 8px;
-  margin: 4px 16px 10px; padding: 7px 11px;
+  margin: 4px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+  padding: 7px 11px;
   background: var(--bg-tint); border-radius: var(--r-ctl);
   color: var(--label-2);
 }
