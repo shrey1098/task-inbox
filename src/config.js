@@ -113,7 +113,11 @@ module.exports = {
     // of Opus 5. Raise this to claude-sonnet-5 (or an Opus) if deadlines start
     // resolving wrongly or the requester/seniority judgement slips — the usage
     // page prices whatever is set here, so the trade is measurable.
-    model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+    // The dated snapshot id, not the bare alias: some accounts only accept
+    // this form and answer the alias with a 404 not_found_error at call time,
+    // which surfaces as every message failing to extract. pricing.js strips
+    // the date before looking a model up, so either form prices correctly.
+    model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
     // How much reasoning the model spends per message. Extraction is a simple
     // job, so 'low' keeps it fast and cheap; raise if classifications feel off.
     // Ignored on models that do not accept it (Haiku 4.5 rejects it outright)

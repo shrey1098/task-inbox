@@ -49,8 +49,19 @@ const MODELS = {
  */
 const UNKNOWN = { label: null, input: 0, output: 0, effort: false, unknown: true };
 
+/**
+ * Look up a model, tolerating a dated snapshot id.
+ *
+ * Anthropic publishes both an alias (claude-haiku-4-5) and a dated full id
+ * (claude-haiku-4-5-20251001). Which one an account accepts is not something
+ * this app can know, and getting it wrong is a 404 at call time — so the table
+ * is keyed by alias and a trailing -YYYYMMDD is stripped before the lookup.
+ * That way pricing, labels and the effort flag all keep working whichever form
+ * ANTHROPIC_MODEL is set to, and a future dated id needs no table edit.
+ */
 function modelInfo(model) {
-  return MODELS[model] ?? UNKNOWN;
+  const id = String(model || '');
+  return MODELS[id] ?? MODELS[id.replace(/-\d{8}$/, '')] ?? UNKNOWN;
 }
 
 /** Does this model accept output_config.effort? */

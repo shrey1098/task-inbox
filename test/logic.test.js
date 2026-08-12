@@ -252,6 +252,22 @@ check('an unknown model is reported as unpriced, not guessed at', () => {
   assert.strictEqual(labelFor('claude-something-7'), 'claude-something-7');
 });
 
+check('a dated snapshot id resolves to the same model as its alias', () => {
+  // Accounts differ on which form the API accepts; ours 404s on the bare
+  // alias. Whichever ANTHROPIC_MODEL is set to, the price, the label and the
+  // effort flag must be identical — otherwise switching the id silently
+  // reprices history or re-enables a parameter the model rejects.
+  const dated = 'claude-haiku-4-5-20251001';
+  assert.strictEqual(labelFor(dated), 'Haiku 4.5');
+  assert.strictEqual(supportsEffort(dated), false, 'the date must not lose the effort flag');
+  assert.strictEqual(modelInfo(dated).unknown, undefined, 'dated id treated as unknown');
+  const call = { input_tokens: 2300, output_tokens: 650 };
+  assert.strictEqual(costOf(call, dated), costOf(call, 'claude-haiku-4-5'));
+  // Config ships the dated form, so the app as deployed must be priced.
+  const shipped = require(path.join(ROOT, 'config')).anthropic.model;
+  assert.ok(!modelInfo(shipped).unknown, `the configured model ${shipped} is unpriced`);
+});
+
 check('effort support is per-model — Haiku rejects it, Opus takes it', () => {
   // Not cosmetic: sending output_config.effort to Haiku 4.5 is a 400, so this
   // flag is the only thing stopping a model switch breaking every extraction.
