@@ -62,12 +62,17 @@
       </button>
     </div>
 
-    <!-- The large title. #nav.scrolled fades this out and the inline one in.
-         The eyebrow above it is a time-of-day greeting, filled in by app.js. -->
+    <!-- The large title. #nav.scrolled collapses this away entirely and fades
+         the inline one in, so scrolling leaves only the bar and the P1/P2/P3
+         segments up top. The eyebrow is a time-of-day greeting, from app.js.
+         The inner div is what the collapse animates: a grid row can only go
+         to 0fr if there is exactly one child for it to squeeze. -->
     <div class="large-title-wrap">
-      <p class="eyebrow" id="greeting"></p>
-      <h1 class="large-title" id="page-title">Inbox</h1>
-      <p class="subtitle" id="synced">Updating…</p>
+      <div class="large-title-inner">
+        <p class="eyebrow" id="greeting"></p>
+        <h1 class="large-title" id="page-title">Inbox</h1>
+        <p class="subtitle" id="synced">Updating…</p>
+      </div>
     </div>
 
     <!-- Search field. Hidden until the magnifier is tapped; it replaces the

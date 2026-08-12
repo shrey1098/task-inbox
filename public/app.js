@@ -1563,8 +1563,17 @@ function summaryView(s) {
 // never scrolls, and window.scrollY would be permanently 0.
 // A passive listener tells the browser we will not preventDefault, so scrolling
 // stays on the compositor and never janks.
+//
+// The two thresholds are deliberate. Collapsing the title makes <main> ~75px
+// taller, which shrinks its maximum scroll by the same amount; with a short
+// list the browser then clamps scrollTop back down, and a single threshold
+// would drop below it and re-expand, giving a visible flap. Collapse at 24
+// and only expand again below 8, so the clamp lands inside the dead band.
 $('#main').addEventListener('scroll', (e) => {
-  $('#nav').classList.toggle('scrolled', e.target.scrollTop > 24);
+  const nav = $('#nav');
+  const y = e.target.scrollTop;
+  if (y > 24) nav.classList.add('scrolled');
+  else if (y < 8) nav.classList.remove('scrolled');
 }, { passive: true });
 
 // Segmented control.
