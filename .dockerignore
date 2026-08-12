@@ -1,0 +1,17 @@
+# Everything the image does not need. Keeping this tight makes the build faster
+# and, more importantly, stops secrets and local state being baked into a layer.
+
+.env
+.env.*
+!.env.example
+
+node_modules
+.git
+.gitignore
+
+test
+data
+*.log
+*.md
+Dockerfile
+.dockerignore

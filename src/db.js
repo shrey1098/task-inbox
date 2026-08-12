@@ -94,6 +94,18 @@ async function connect() {
   return db;
 }
 
+/**
+ * Is the database actually reachable? Used by the health endpoint.
+ *
+ * `ping` is the cheapest command Mongo has — it does no work and touches no
+ * collection, so a probe every few seconds costs nothing.
+ */
+async function ping() {
+  if (!db) throw new Error('not connected');
+  await db.command({ ping: 1 });
+  return true;
+}
+
 /** Close the pool on shutdown so Mongo doesn't hold a dead connection open. */
 async function close() {
   if (client) await client.close();
@@ -644,6 +656,7 @@ const deleteUserSessions = (userId) => db.collection('sessions').deleteMany({ us
 
 module.exports = {
   connect,
+  ping,
   close,
   createUser,
   getUser,

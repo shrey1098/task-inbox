@@ -187,6 +187,28 @@ function createApp() {
   app.use(express.json({ limit: '256kb' })); // 2. parse JSON bodies (capped — nothing here is large)
   app.use(auth.attachUser);                  // 3. set req.user from the session cookie
 
+  /**
+   * Liveness probe for the platform (Railway, Fly, Docker HEALTHCHECK).
+   *
+   * Registered BEFORE the sign-in gate below, because a health checker carries
+   * no session cookie and must not be answered with a redirect to the login
+   * page — the platform would read a 302 as "unhealthy" and restart the app in
+   * a loop.
+   *
+   * It pings the database rather than just returning 200: a process that
+   * cannot reach Mongo is not healthy, and reporting otherwise would keep a
+   * broken deploy in the load balancer.
+   */
+  app.get('/healthz', async (_req, res) => {
+    try {
+      await dbModule.ping();
+      res.json({ ok: true, uptime: Math.round(process.uptime()) });
+    } catch (err) {
+      log.error('health check failed:', err.message);
+      res.status(503).json({ ok: false, error: 'database unreachable' });
+    }
+  });
+
   // 4. Gate the app shell BEFORE static files are served, so a signed-out
   //    visitor gets the login page rather than a flash of empty dashboard.
   app.use((req, res, next) => {

@@ -16,5 +16,8 @@
     "@anthropic-ai/sdk": "^0.116.0",
     "express": "^4.19.2",
     "mongodb": "^6.10.0"
+  },
+  "engines": {
+    "node": ">=20.12"
   }
 }
