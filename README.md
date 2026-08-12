@@ -25,7 +25,7 @@ cp .env.example .env   # fill in MONGODB_URI, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_
 npm start
 ```
 
-Open http://localhost:3200 for the dashboard, then send your bot any message on Telegram. The first chat that messages the bot gets pinned as the only allowed user (or set `TELEGRAM_ALLOWED_CHAT_IDS` explicitly).
+Open http://localhost:3200, create an account, then link your Telegram chat from **Account → Link Telegram** (see below). A chat that is not linked to an account cannot do anything.
 
 ## Accounts
 
@@ -164,9 +164,38 @@ missed day does.
 - **Search** — partial-word matching across titles, details, requesters and notes.
 - **Stats** — level, streak, lifetime totals, and a summary for any period you pick, including an arbitrary date range.
 
+## Deploying
+
+Runs anywhere that takes a Dockerfile. It is currently on **Railway** with
+**MongoDB Atlas M0** (free tier), which took about an hour end to end.
+
+```sh
+docker build -t task-inbox .
+docker run -p 3200:3200 --env-file .env task-inbox
+```
+
+Environment for a hosted deploy:
+
+| Variable | Why it matters |
+| --- | --- |
+| `MONGODB_URI` | An Atlas `mongodb+srv://` string. Allow `0.0.0.0/0` in Atlas Network Access — a PaaS has no stable outbound IP to allowlist. |
+| `TRUST_PROXY=true` | **Required behind any proxy.** Without it every client looks like the proxy's IP, so one person's wrong password can rate-limit everybody. |
+| `NODE_ENV=production` | |
+| `TIMEZONE` | The digest and the weekly review fire on this one zone for all users. |
+| `ALLOW_SIGNUP` | Set to `false` once your accounts exist. |
+
+Two deployment notes learned the hard way:
+
+- **Do not set `PORT`.** The platform injects it and the app honours it. Do
+  make sure the generated domain's *target port* matches what the app logs on
+  boot — a mismatch is a 502 with no useful error anywhere.
+- The image is `node:22-alpine`, which publishes arm64, so the same Dockerfile
+  builds on a Raspberry Pi. Note that **MongoDB 5.0+ needs ARMv8.2-A**: a Pi 5
+  can run it locally, a Pi 4 cannot — point a Pi 4 at Atlas instead.
+
 ## Production readiness
 
-`npm test` runs three suites — 102 checks in total:
+`npm test` runs three suites — 103 checks in total:
 
 | Suite | What it covers |
 | --- | --- |
@@ -198,21 +227,31 @@ The security suite assumes an attacker, a second tenant, or bad timing:
 
 ### The limit of that testing
 
-Every suite runs against an **in-memory stand-in for MongoDB**, not MongoDB. The
-double mirrors the real behaviour where it matters (duplicate-key errors, the
-field allowlist, tenant filtering, atomic completion), but it is not the
-database. Three things are therefore **unverified against a real server**:
+Every suite runs against an **in-memory stand-in for MongoDB**, not MongoDB.
+The double mirrors the real behaviour where it matters (duplicate-key errors,
+the field allowlist, tenant filtering, atomic completion), but it is not the
+database, and it never calls the model.
 
-- The **aggregation-pipeline update** in `addProgress` (`$toLong: "$$NOW"`,
-  `$concatArrays`, `$slice`). A review of it found a genuine bug the tests
-  could not — a bare `$$NOW` stores a BSON Date, which would have reached the
-  browser as an ISO string and made every "2h ago" read `NaN`. There may be
-  more of that kind.
-- The **index definitions**, which are only exercised by `connect()`.
-- The **Claude extractor**, which no test calls: the schema, the vision path
-  and the structured-output contract are all unverified since the last change.
+What the tests cannot reach has instead been **verified by hand in production**:
 
-Run against a real `mongod` and forward one real message before trusting it.
+| Never covered by a test | Status |
+| --- | --- |
+| The aggregation-pipeline update in `addProgress` | ✅ Working on Atlas — steps log and timestamps render |
+| The index definitions, only run by `connect()` | ✅ Created on first boot, no errors |
+| The Claude extractor: schema, structured output | ✅ Extracting tasks, deadlines and priorities |
+| The Telegram bot: long polling, linking, commands | ✅ Forwarded messages become tasks |
+| Photo (vision) and voice input | ⚠️ Still unexercised. Voice also needs `TRANSCRIBE_URL` set |
+
+One bug was found this way rather than by a test, which is the point of writing
+this section down: a bare `$$NOW` in the pipeline update stores a BSON Date,
+while every other timestamp in the app is epoch milliseconds. It would have
+reached the browser as an ISO string and made every "2h ago" read `NaN`. The
+in-memory double used `Date.now()` and so was accidentally *more correct* than
+the real code. Hence `$toLong: "$$NOW"`.
+
+If you change `db.js` or `extractor.js`, run it against a real `mongod` and
+forward one real message before trusting it. Green tests are necessary here,
+not sufficient.
 
 ### Known gaps, deliberately still open
 
