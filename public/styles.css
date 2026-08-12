@@ -65,6 +65,17 @@
   --card-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 8px 24px -12px rgb(0 0 0 / .18);
   --blur: saturate(180%) blur(20px);
 
+  /* The tab bar's fill, and the one surface in the app that is deliberately
+     opaque. Everything else that floats can be translucent-over-blur, because
+     everything else floats over the middle of the page. The tab bar has to
+     cover the very bottom of the screen, and WebKit does not reliably paint a
+     backdrop-filtered background all the way into that strip — which is what
+     put an unblurred band of the ambient gradient under the bar on iOS while
+     Firefox rendered it correctly. An opaque fill has no backdrop to sample
+     and therefore nothing to get wrong. Values are Apple's own tab bar greys.
+     */
+  --bg-bar: #f8f8fa;
+
   /* Ambient blob opacity — dialled back in dark mode, where colour reads hotter. */
   --ambient: .55;
 
@@ -120,6 +131,7 @@
     --card-border: rgb(255 255 255 / .09);
     --card-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 12px 30px -14px rgb(0 0 0 / .9);
     --ambient: .40;
+    --bg-bar: #161618;
   }
 }
 
@@ -148,6 +160,7 @@
   --card-border: rgb(255 255 255 / .09);
   --card-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 12px 30px -14px rgb(0 0 0 / .9);
   --ambient: .40;
+  --bg-bar: #161618;
 }
 
 /* --------------------------------------------------------------------- base */
@@ -693,34 +706,34 @@ main {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   max-width: 560px; margin-inline: auto;
   display: flex;
-  /* The bar is anchored at bottom: 0, which on Chrome puts its box exactly on
-     the bottom of the screen. On the installed iOS app it does not get all
-     the way there, and the strip it leaves over the home indicator shows the
-     page through — the ambient gradient sits at 92% height, so that band
-     reads as a blue stripe under the bar.
+  /* Two separate defences against the band that kept appearing under the bar
+     on iOS, because there were two things wrong.
 
-     So the box is deliberately overgrown: --bleed of extra bottom padding
-     pushes the background down past where the anchor lands, and an equal
-     negative bottom margin shifts the whole box down by the same amount so
-     the anchor still resolves to bottom: 0. The buttons do not move — the
-     growth is all padding below them — and where the bar was already flush,
-     the overhang falls off the bottom of the viewport and is clipped, so it
-     costs nothing on the platforms that were correct all along.
+     Geometry: bottom: 0 puts the box on the bottom of the screen in Chrome
+     and Firefox, and on the installed iOS app it does not quite get there.
+     So the box is deliberately overgrown — --bleed of extra bottom padding
+     pushes the fill down past wherever the anchor lands, and an equal
+     negative bottom margin shifts the box down by the same amount so the
+     anchor still resolves to bottom: 0. The buttons do not move, because all
+     the growth is padding below them, and where the bar was already flush the
+     overhang falls off the viewport and is clipped.
 
-     Growing the bar's own box, rather than parking a filler behind it, is
-     what makes the fill match: the band gets the real background AND the
-     real backdrop blur. A separate element would have to reproduce both, and
-     a translucent fill with no blur over that gradient is exactly the blue
-     stripe we are trying to remove.
+     Paint: the fill is opaque, and this is the one surface in the app that
+     is. Everything else that floats is translucent over a backdrop blur, but
+     everything else floats over the middle of the page. WebKit does not
+     reliably paint a backdrop-filtered background into the strip at the very
+     bottom of the screen — the giveaway was that the band showed the ambient
+     gradient sharp and saturated rather than blurred, and that Firefox
+     rendered the same CSS correctly. An opaque fill has no backdrop to
+     sample, so there is nothing left to get wrong. The nav bar at the top
+     keeps its blur; it is not up against the edge of the compositor.
 
      --safe-b is the clearance above the home indicator: just the indicator,
      not the whole reserved inset. It only sets how far up the labels sit. */
   --bleed: 60px;
   padding-bottom: calc(var(--safe-b) + var(--bleed));
   margin-bottom: calc(-1 * var(--bleed));
-  background: color-mix(in srgb, var(--bg-cell) 72%, transparent);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
+  background: var(--bg-bar);
   border-top: .5px solid var(--separator);
 }
 .tabbar button {
