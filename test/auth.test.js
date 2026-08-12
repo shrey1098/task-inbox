@@ -8,7 +8,11 @@ const ROOT = '/home/user/task-inbox/src';
 /* ---------------------------------------------------------- fake database */
 const users = [], sessions = [], tasks = [], messages = [], state = new Map();
 let seq = { users: 0, tasks: 0, messages: 0 };
-const dup = () => Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+// keyPattern names which index rejected the write, exactly as the driver does.
+// Without it the server cannot tell an email collision from any other unique
+// index, which is the confusion that produced a wrong signup error in prod.
+const dup = (keyPattern) =>
+  Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern });
 
 const fakeDb = {
   connect: async () => {}, close: async () => {},
@@ -17,7 +21,7 @@ const fakeDb = {
 
   createUser: async ({ email, password_hash }) => {
     email = email.toLowerCase().trim();
-    if (users.some((u) => u.email === email)) throw dup();          // unique index
+    if (users.some((u) => u.email === email)) throw dup({ email: 1 }); // unique index
     const doc = { id: ++seq.users, email, password_hash, tg_chat_id: null,
                   link_code: null, link_code_expires: null, created_at: Date.now() };
     users.push(doc); return doc;
@@ -29,7 +33,7 @@ const fakeDb = {
   countUsers: async () => users.length,
   updateUser: async (id, f) => {
     const u = users.find((x) => x.id === id);
-    if (f.tg_chat_id != null && users.some((x) => x.id !== id && x.tg_chat_id === f.tg_chat_id)) throw dup();
+    if (f.tg_chat_id != null && users.some((x) => x.id !== id && x.tg_chat_id === f.tg_chat_id)) throw dup({ tg_chat_id: 1 });
     Object.assign(u, f); return u;
   },
 
@@ -198,6 +202,28 @@ async function check(name, fn) {
     const r = await anon('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email: 'alice@example.com', password: 'yet-another-password' }) });
     assert.strictEqual(r.status, 409, `got ${r.status}`);
   });
+  await check('a non-email unique-index clash is not blamed on the email', async () => {
+    // The bug this guards: a unique index on tg_chat_id was rejecting every
+    // account after the first, and the server reported it as "that email is
+    // already registered" — an answer that was both wrong and confident, and
+    // sent debugging to a users collection that had no such row. A collision
+    // on any OTHER index must surface as a server error we can find in the
+    // logs, not as a claim about what the user typed.
+    const real = fakeDb.createUser;
+    fakeDb.createUser = async () => { throw dup({ tg_chat_id: 1 }); };
+    try {
+      const r = await anon('/api/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'fresh@example.com', password: 'a-long-enough-password' }),
+      });
+      assert.strictEqual(r.status, 500, `got ${r.status}`);
+      assert.ok(!JSON.stringify(r.body ?? '').includes('already registered'),
+        'a tg_chat_id collision was reported as a duplicate email');
+    } finally {
+      fakeDb.createUser = real;
+    }
+  });
+
   await check('short password is rejected', async () => {
     const r = await anon('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email: 'x@example.com', password: 'short' }) });
     assert.strictEqual(r.status, 400, `got ${r.status}`);

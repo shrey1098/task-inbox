@@ -287,7 +287,13 @@ function createApp() {
       log.info(`new account #${user.id} ${email}`);
       res.status(201).json({ email: user.email, tg_linked: false });
     } catch (err) {
-      if (err.code === 11000) { // unique index on email
+      // 11000 is "some unique index rejected this", not "the email is taken".
+      // Check WHICH index: assuming there was only ever one is what turned a
+      // broken tg_chat_id index into a confident, wrong message about the
+      // email address, and cost an evening of looking in the wrong place.
+      // Anything else rethrows and becomes a logged 500 — an honest "we broke"
+      // beats a plausible lie about the user's input.
+      if (err.code === 11000 && err.keyPattern?.email) {
         return res.status(409).json({ error: 'that email is already registered' });
       }
       throw err;

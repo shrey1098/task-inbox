@@ -262,6 +262,30 @@ check('effort support is per-model — Haiku rejects it, Opus takes it', () => {
   assert.strictEqual(supportsEffort('claude-something-7'), false);
 });
 
+/* -------------------------------------------------- index declarations */
+
+check('no unique index in db.js is declared sparse', () => {
+  // This is a source-level check, and it exists because no in-memory double
+  // can catch the bug it guards. MongoDB's `sparse` omits documents where the
+  // indexed field is MISSING — not where it is null. Every account is written
+  // with `tg_chat_id: null`, so a `{unique: true, sparse: true}` index put
+  // them all in the index and rejected the second account ever created, with
+  // an E11000 the HTTP layer then misreported as a duplicate email.
+  //
+  // partialFilterExpression is the correct tool and is what both indexes in
+  // db.js now use. A test double models intent, so only the real database
+  // could have caught this — and it did, in production. This assertion is the
+  // cheapest thing that would have.
+  const src = require('fs').readFileSync(path.join(ROOT, 'db.js'), 'utf8');
+  // Each createIndex(...) call, options included, across line breaks.
+  const calls = src.match(/createIndex\([\s\S]*?\)\s*;/g) || [];
+  assert.ok(calls.length >= 5, `expected several createIndex calls, found ${calls.length}`);
+  const offenders = calls.filter((c) => /unique:\s*true/.test(c) && /sparse:\s*true/.test(c));
+  assert.deepStrictEqual(offenders, [],
+    'a unique+sparse index will reject the second document whose field is null — '
+    + 'use partialFilterExpression instead');
+});
+
 console.log(results.join('\n'));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

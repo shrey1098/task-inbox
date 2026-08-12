@@ -80,9 +80,7 @@ async function connect() {
   await db.collection('state').createIndex({ key: 1 }, { unique: true });
 
   await db.collection('users').createIndex({ email: 1 }, { unique: true });
-  // sparse: only documents that HAVE a tg_chat_id take part, so the many users
-  // with none don't all collide on null.
-  await db.collection('users').createIndex({ tg_chat_id: 1 }, { unique: true, sparse: true });
+  await ensureLinkedChatIndex();
   await db.collection('users').createIndex({ link_code: 1 }, { sparse: true });
 
   await db.collection('sessions').createIndex({ token_hash: 1 }, { unique: true });
@@ -99,6 +97,44 @@ async function connect() {
   await db.collection('usage').createIndex({ at: -1 });
 
   return db;
+}
+
+/**
+ * One Telegram chat may link to at most one account.
+ *
+ * This was originally a `sparse: true` unique index, which was wrong in a way
+ * that took a while to surface. **A sparse index omits documents where the
+ * field is MISSING — not where it is null.** createUser writes
+ * `tg_chat_id: null` explicitly, so every unlinked account carried an index
+ * entry for null, and the second account ever created collided with the first.
+ * The symptom was a signup failing with E11000, which the HTTP layer reported
+ * as "that email is already registered" — sending you to look at the users
+ * collection for a row that was never there.
+ *
+ * partialFilterExpression is the correct tool: it indexes only documents whose
+ * tg_chat_id is actually a number, so unlinked accounts take no part at all.
+ * The messages collection above already does exactly this, for exactly this
+ * reason — the mistake here was not applying a lesson already learned in this
+ * same file.
+ *
+ * The drop is a migration, not a precaution: any deployment created before
+ * this fix already has the sparse index, and createIndex refuses to change an
+ * existing index's options (IndexOptionsConflict) rather than silently
+ * replacing it. Dropping is safe — the index is a constraint, not data.
+ */
+async function ensureLinkedChatIndex() {
+  const users = db.collection('users');
+  const wanted = { unique: true, partialFilterExpression: { tg_chat_id: { $type: 'number' } } };
+
+  const existing = await users.indexes();
+  const current = existing.find((i) => i.name === 'tg_chat_id_1');
+  // Only the old shape is dropped; the fixed one is left alone so a restart
+  // does not churn the index on every boot.
+  if (current && !current.partialFilterExpression) {
+    await users.dropIndex('tg_chat_id_1');
+  }
+
+  await users.createIndex({ tg_chat_id: 1 }, wanted);
 }
 
 /**

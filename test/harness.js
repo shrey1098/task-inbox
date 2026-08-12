@@ -18,8 +18,17 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', 'src');
 
-/** Mongo's duplicate-key error, which several code paths branch on. */
-const dupKey = () => Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+/**
+ * Mongo's duplicate-key error, which several code paths branch on.
+ *
+ * keyPattern names WHICH index rejected the write, and the real driver always
+ * supplies it. The double omitted it, which let server.js get away with
+ * treating every 11000 on `users` as an email collision — a shortcut that
+ * later reported a broken tg_chat_id index as "that email is already
+ * registered". Callers must say which index they are simulating.
+ */
+const dupKey = (keyPattern) =>
+  Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern });
 
 /** The same allowlist db.js applies to PATCH. Kept in step deliberately. */
 const TASK_UPDATE_ALLOWLIST = [
@@ -71,7 +80,7 @@ function makeFakeDb(events) {
 
     createUser: async ({ email, password_hash }) => {
       const clean = email.toLowerCase().trim();
-      if (users.some((u) => u.email === clean)) throw dupKey(); // unique index
+      if (users.some((u) => u.email === clean)) throw dupKey({ email: 1 });
       const doc = {
         id: ++seq.users, email: clean, password_hash, tg_chat_id: null,
         link_code: null, link_code_expires: null,
@@ -89,7 +98,11 @@ function makeFakeDb(events) {
       const u = users.find((x) => x.id === id);
       if (!u) return null;
       if (f.tg_chat_id != null && users.some((x) => x.id !== id && x.tg_chat_id === f.tg_chat_id)) {
-        throw dupKey(); // the unique sparse index on tg_chat_id
+        // The unique index on tg_chat_id. Partial, not sparse: it covers only
+        // documents whose tg_chat_id is a number, so the many unlinked
+        // accounts (tg_chat_id: null) never collide with each other. The
+        // `!= null` guard above is what models that.
+        throw dupKey({ tg_chat_id: 1 });
       }
       Object.assign(u, f);
       return u;
