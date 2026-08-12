@@ -97,6 +97,15 @@ module.exports = {
     pollTimeoutSeconds: int(process.env.TELEGRAM_POLL_TIMEOUT, 30),
   },
 
+  // The one account allowed to see the cross-account usage monitor. Everything
+  // else in this app is strictly per-account; this is the single deliberate
+  // exception, so it is one email rather than a role system — a roles table
+  // would be more machinery than one operator needs, and more surface to get
+  // wrong. Compared case-insensitively, because that is how emails are stored.
+  //
+  // Set ADMIN_EMAIL to override, or to '' to switch the monitor off entirely.
+  adminEmail: (process.env.ADMIN_EMAIL ?? 'shrey1098@hotmail.com').toLowerCase().trim(),
+
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
     // Extraction is structured reading, not deep reasoning, so it runs on the

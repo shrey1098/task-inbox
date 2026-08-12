@@ -229,7 +229,12 @@ function makeFakeDb(events) {
     // the real summariser would still pass if the real query lost its
     // user_id filter, which is the one thing this most needs to catch.
     usageSummary: async (uid, from, to) => {
-      const rows = usage.filter((r) => r.user_id === uid && r.at >= from && r.at <= to);
+      if (uid === undefined) throw new Error('usageSummary: pass a user id, or null for all accounts');
+      // null means every account — the operator's monitor. Mirrored here so a
+      // test can prove the admin route really does cross the boundary, and
+      // that the non-admin route never reaches this branch.
+      const rows = usage.filter((r) =>
+        (uid === null || r.user_id === uid) && r.at >= from && r.at <= to);
       const tot = (list) => list.reduce((a, r) => ({
         calls: a.calls + 1,
         input_tokens: a.input_tokens + (r.input_tokens || 0),
@@ -250,20 +255,32 @@ function makeFakeDb(events) {
         }
         return [...map].map(([_id, list]) => ({ _id, ...tot(list) }));
       };
+      // The sort orders matter and are mirrored from the real $facet: the page
+      // presents these lists in the order it receives them, so a double that
+      // returned insertion order would let an ordering bug pass here.
+      const byCost = (a, b) => b.cost_usd - a.cost_usd;
       return {
         overall: rows.length ? [{ _id: null, ...tot(rows) }] : [],
-        by_model: groupBy('model'),
-        by_day: groupBy((r) => new Date(r.at).toISOString().slice(0, 10)),
+        by_model: groupBy('model').sort(byCost),
+        by_day: groupBy((r) => new Date(r.at).toISOString().slice(0, 10))
+          .sort((a, b) => (a._id < b._id ? -1 : 1)),
         failures: groupBy('stop_reason')
           .filter((g) => g._id && g._id !== 'end_turn')
-          .map((g) => ({ _id: g._id, n: g.calls, cost_usd: g.cost_usd })),
+          .map((g) => ({ _id: g._id, n: g.calls, cost_usd: g.cost_usd }))
+          .sort((a, b) => b.n - a.n),
+        by_user: groupBy('user_id').sort(byCost),
       };
     },
-    recentUsage: async (uid, limit = 20) => usage
-      .filter((r) => r.user_id === uid)
-      .sort((a, b) => b.at - a.at)
-      .slice(0, limit)
-      .map(({ user_id, ...r }) => r),
+    recentUsage: async (uid, limit = 20) => {
+      if (uid === undefined) throw new Error('recentUsage: pass a user id, or null for all accounts');
+      return usage
+        .filter((r) => uid === null || r.user_id === uid)
+        .sort((a, b) => b.at - a.at)
+        .slice(0, limit);
+    },
+    emailsForIds: async (ids) => users
+      .filter((u) => [...ids].includes(u.id))
+      .map((u) => ({ id: u.id, email: u.email })),
 
     addProgress: async (uid, id, text) => {
       const t = tasks.find((x) => x.id === id && x.user_id === uid);

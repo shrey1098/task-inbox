@@ -1702,6 +1702,9 @@ async function loadAccount() {
     state.settings = settings;
 
     $('#acct-email').textContent = me.email;
+    // Operator-only section. Cosmetic: /api/usage does the real check, so a
+    // client that flipped this flag by hand would still get nothing back.
+    $('#admin-area').hidden = !me.is_admin;
     $('#acct-tg').textContent = me.tg_linked ? 'Linked' : 'Not linked';
     $('#acct-tg').classList.toggle('ok', me.tg_linked);
     // Linking and unlinking are mutually exclusive states.

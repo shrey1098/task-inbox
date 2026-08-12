@@ -11,10 +11,13 @@
 </head>
 <body>
 <!--
-  The API-spend page. Its own path (/usage) rather than a panel inside the
-  account sheet: this is something you go and look at, and a URL can be
-  bookmarked. Everything here is read-only, so there is no save path to get
-  wrong — the page fetches /api/usage and renders it.
+  The operator's monitor: API spend across every account on this deployment.
+  Its own path (/usage) rather than a panel inside the account sheet — it is
+  something you go and look at, and a URL can be bookmarked.
+
+  Everything here is read-only, so there is no save path to get wrong, and the
+  page holds no numbers of its own: the server gates both this file and
+  /api/usage on the configured operator address.
 -->
 <div class="app">
 
@@ -30,7 +33,7 @@
     </div>
     <div class="large-title-wrap">
       <div class="large-title-inner">
-        <p class="eyebrow" id="eyebrow">API spend</p>
+        <p class="eyebrow" id="eyebrow">All accounts</p>
         <h1 class="large-title">Usage</h1>
         <p class="subtitle" id="range">Loading…</p>
       </div>

@@ -91,9 +91,12 @@ async function connect() {
   // passes, so expired rows don't accumulate forever.
   await db.collection('sessions').createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
-  // The API-spend ledger. Every query it serves is "this account, this date
-  // range, newest first", so one compound index covers all of them.
+  // The API-spend ledger. Two shapes of query, so two indexes: one account
+  // over a date range, and — for the operator's monitor — every account over
+  // a date range. The compound index cannot serve the second, because that
+  // one does not constrain user_id at all and so cannot use the prefix.
   await db.collection('usage').createIndex({ user_id: 1, at: -1 });
+  await db.collection('usage').createIndex({ at: -1 });
 
   return db;
 }
@@ -572,9 +575,17 @@ function recordUsage(userId, row) {
  * the totals, the per-model split and the daily series all come from one pass
  * over one index range instead of three separate queries that could disagree
  * with each other if a call landed between them.
+ *
+ * `userId` of null means EVERY account — the operator's monitor. That is a
+ * deliberate hole in the tenancy rule the rest of this file enforces, so it is
+ * spelled as an explicit null rather than an omitted argument: a caller that
+ * forgets to pass a user id gets a crash, not a silent cross-account read.
  */
 async function usageSummary(userId, from, to, tz = 'UTC') {
-  const match = { user_id: userId, at: { $gte: from, $lte: to } };
+  if (userId === undefined) throw new Error('usageSummary: pass a user id, or null for all accounts');
+
+  const match = { at: { $gte: from, $lte: to } };
+  if (userId !== null) match.user_id = userId;
 
   const totals = {
     calls: { $sum: 1 },
@@ -614,18 +625,32 @@ async function usageSummary(userId, from, to, tz = 'UTC') {
           { $group: { _id: '$stop_reason', n: { $sum: 1 }, cost_usd: { $sum: '$cost_usd' } } },
           { $sort: { n: -1 } },
         ],
+        // Only meaningful in the all-accounts view; harmless (one group) in
+        // the single-account one, and computing it unconditionally keeps this
+        // function from needing to know which caller it is serving.
+        by_user: [
+          { $group: { _id: '$user_id', ...totals, last_at: { $max: '$at' } } },
+          { $sort: { cost_usd: -1 } },
+        ],
       },
     },
   ]).toArray();
 
-  return out ?? { overall: [], by_model: [], by_day: [], failures: [] };
+  return out ?? { overall: [], by_model: [], by_day: [], failures: [], by_user: [] };
 }
 
-/** The most recent calls, for the "recent activity" list. */
+/**
+ * The most recent calls. `userId` null means every account — same rule and
+ * same reasoning as usageSummary above.
+ *
+ * user_id is kept in the projection here, unlike the per-account path, because
+ * the operator's view has to say whose call each row was.
+ */
 function recentUsage(userId, limit = 20) {
+  if (userId === undefined) throw new Error('recentUsage: pass a user id, or null for all accounts');
   return db.collection('usage')
-    .find({ user_id: userId })
-    .project({ _id: 0, user_id: 0 })
+    .find(userId === null ? {} : { user_id: userId })
+    .project({ _id: 0 })
     .sort({ at: -1 })
     .limit(limit)
     .toArray();
@@ -714,6 +739,18 @@ function listUsersWithChat() {
   return db.collection('users').find({ tg_chat_id: { $ne: null } }).toArray();
 }
 
+/**
+ * id → email for the accounts named, so the operator's monitor can label the
+ * rows it aggregated. Ids only, and only the email field: this is the whole
+ * of what the cross-account view is allowed to learn about other people.
+ */
+function emailsForIds(ids) {
+  return db.collection('users')
+    .find({ id: { $in: [...ids] } })
+    .project({ _id: 0, id: 1, email: 1 })
+    .toArray();
+}
+
 const getUser = (id) => db.collection('users').findOne({ id });
 const getUserByEmail = (email) =>
   db.collection('users').findOne({ email: String(email).toLowerCase().trim() });
@@ -771,6 +808,7 @@ module.exports = {
   DEFAULT_SETTINGS,
   settingsOf,
   listUsersWithChat,
+  emailsForIds,
   addProgress,
   deleteProgress,
   MAX_PROGRESS,

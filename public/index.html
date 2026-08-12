@@ -216,11 +216,15 @@
     <h3 class="sheet-head">Install</h3>
     <div id="install-area"></div>
 
-    <h3 class="sheet-head">API usage</h3>
-    <p class="sheet-note">
-      Tokens and estimated cost for the messages you have forwarded.
-    </p>
-    <a class="btn-plain" href="/usage">View usage and cost</a>
+    <!-- Operator only. Hidden unless /api/me says this account is the admin;
+         the endpoint behind it enforces the same rule server-side. -->
+    <div id="admin-area" hidden>
+      <h3 class="sheet-head">Monitoring</h3>
+      <p class="sheet-note">
+        Tokens and estimated cost across every account on this deployment.
+      </p>
+      <a class="btn-plain" href="/usage">API usage and cost</a>
+    </div>
 
     <h3 class="sheet-head">Nudges</h3>
     <div class="group" id="settings-group"></div>

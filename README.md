@@ -186,6 +186,7 @@ Environment for a hosted deploy:
 | `TIMEZONE` | The digest and the weekly review fire on this one zone for all users. |
 | `ALLOW_SIGNUP` | Set to `false` once your accounts exist. |
 | `ANTHROPIC_MODEL` | Defaults to `claude-haiku-4-5`. Every call is priced and shown at `/usage`, so changing this is a measurable trade rather than a guess. |
+| `ADMIN_EMAIL` | The only account that may open `/usage`, which reports spend across **every** account. The single deliberate exception to the per-account rule everything else follows. Empty disables the monitor. |
 | `DISPLAY_CURRENCY` / `DISPLAY_RATE` | Optional second currency on `/usage`. Both must be set; there is no exchange-rate lookup. |
 
 Two deployment notes learned the hard way:

@@ -46,6 +46,7 @@ const PROTECTED = [
   ['GET', '/api/settings'],
   ['GET', '/api/stats'],
   ['GET', '/api/me'],
+  ['GET', '/api/usage'],
   ['GET', '/api/events'],
   ['GET', '/api/messages/1/image'],
   ['POST', '/api/tasks'],
@@ -66,6 +67,13 @@ const PROTECTED = [
 
   const alice = (await signUp(base, 'alice@example.com')).client;
   const bob = (await signUp(base, 'bob@example.com')).client;
+
+  // The usage monitor is gated on one address. isAdmin reads config at request
+  // time, so pointing it at a test account here is enough — and it means these
+  // tests never depend on the real operator's address.
+  const cfg = require(path.join(ROOT, 'config'));
+  cfg.adminEmail = 'boss@example.com';
+  const boss = (await signUp(base, 'boss@example.com')).client;
 
   /* ================================================== 1. authentication === */
 
@@ -277,39 +285,93 @@ const PROTECTED = [
     assert.strictEqual(after.body.progress.length, 0);
   });
 
-  await check('usage and cost are per-account, never pooled', async () => {
-    const aliceUser = fakeDb._users.find((u) => u.email === 'alice@example.com');
-    const bobUser = fakeDb._users.find((u) => u.email === 'bob@example.com');
+  await check('the usage monitor is invisible to everyone but the operator', async () => {
+    // 404 rather than 403: a 403 would confirm the route exists and that
+    // somebody is privileged on it. Signed in is not the same as entitled.
+    for (const who of [alice, bob]) {
+      const r = await who('/api/usage?days=30');
+      assert.strictEqual(r.status, 404, `a non-admin got ${r.status}`);
+      assert.ok(!JSON.stringify(r.body).includes('cost_usd'), 'a non-admin got figures');
+    }
+    assert.strictEqual((await boss('/api/usage?days=30')).status, 200);
+  });
+
+  await check('the operator sees every account, attributed and totalled', async () => {
+    const idOf = (email) => fakeDb._users.find((u) => u.email === email).id;
     const now = Date.now();
+    fakeDb._usage.length = 0;
+    fakeDb._usage.push(
+      { user_id: idOf('alice@example.com'), at: now, message_id: 1, model: 'claude-haiku-4-5',
+        input_tokens: 2000, output_tokens: 500, cost_usd: 0.0045, stop_reason: 'end_turn' },
+      { user_id: idOf('bob@example.com'), at: now, message_id: 2, model: 'claude-opus-5',
+        input_tokens: 9000, output_tokens: 4000, cost_usd: 0.145, stop_reason: 'end_turn' },
+      { user_id: idOf('bob@example.com'), at: now, message_id: 3, model: 'claude-opus-5',
+        input_tokens: 1000, output_tokens: 200, cost_usd: 0.010, stop_reason: 'end_turn' },
+    );
 
-    // Alice spends; Bob spends more, on a different model.
-    fakeDb._usage.push({
-      user_id: aliceUser.id, at: now, message_id: 1, model: 'claude-haiku-4-5',
-      input_tokens: 2000, output_tokens: 500, cost_usd: 0.0045, stop_reason: 'end_turn',
-    });
-    fakeDb._usage.push({
-      user_id: bobUser.id, at: now, message_id: 2, model: 'claude-opus-5',
-      input_tokens: 9000, output_tokens: 4000, cost_usd: 0.145, stop_reason: 'end_turn',
-    });
+    const d = (await boss('/api/usage?days=30')).body;
+    assert.strictEqual(d.scope, 'all-accounts');
+    assert.strictEqual(d.overall.calls, 3, 'the total is not across all accounts');
+    assert.ok(Math.abs(d.overall.cost_usd - 0.1595) < 1e-9, `total was ${d.overall.cost_usd}`);
 
-    const a = (await alice('/api/usage?days=30')).body;
-    assert.strictEqual(a.overall.calls, 1, 'alice sees a call that is not hers');
-    assert.ok(Math.abs(a.overall.cost_usd - 0.0045) < 1e-9, 'alice’s total includes bob’s spend');
-    assert.deepStrictEqual(a.by_model.map((m) => m.model), ['claude-haiku-4-5']);
-    // Bob's much larger figure must not leak through any facet of the response.
-    assert.ok(!JSON.stringify(a).includes('claude-opus-5'), 'bob’s model leaked to alice');
-    assert.strictEqual(a.recent.length, 1);
+    // Attributed by address, biggest spender first.
+    assert.strictEqual(d.accounts, 2);
+    assert.deepStrictEqual(d.by_user.map((u) => u.email), ['bob@example.com', 'alice@example.com']);
+    assert.strictEqual(d.by_user[0].calls, 2);
+    // Per-account figures must sum to the headline, or the page lies.
+    const summed = d.by_user.reduce((a, u) => a + u.cost_usd, 0);
+    assert.ok(Math.abs(summed - d.overall.cost_usd) < 1e-9, 'by_user does not sum to overall');
 
-    const b = (await bob('/api/usage?days=30')).body;
-    assert.strictEqual(b.overall.calls, 1);
-    assert.ok(Math.abs(b.overall.cost_usd - 0.145) < 1e-9);
+    // Recent calls say whose they were.
+    assert.strictEqual(d.recent.length, 3);
+    assert.ok(d.recent.every((r) => typeof r.email === 'string' && r.email.includes('@')));
+  });
+
+  await check('spend outlives the account it belonged to', async () => {
+    // A deleted user must not silently drop its history out of the totals —
+    // the money was still spent.
+    fakeDb._usage.length = 0;
+    fakeDb._usage.push({ user_id: 99999, at: Date.now(), message_id: 9,
+      model: 'claude-haiku-4-5', input_tokens: 100, output_tokens: 10,
+      cost_usd: 0.00015, stop_reason: 'end_turn' });
+
+    const d = (await boss('/api/usage?days=30')).body;
+    assert.strictEqual(d.overall.calls, 1);
+    assert.match(d.by_user[0].email, /deleted/, 'an orphaned row was mislabelled');
+  });
+
+  await check('the monitor page is withheld from non-operators', async () => {
+    // Both the pretty path and the raw file — express.static would otherwise
+    // serve the shell to anyone who guessed the filename.
+    for (const url of ['/usage', '/usage.html']) {
+      const mine = await boss(url);
+      assert.strictEqual(mine.status, 200, `operator was refused ${url}`);
+
+      const theirs = await alice(url, { redirect: 'manual' });
+      assert.ok([301, 302, 303, 307, 308].includes(theirs.status),
+        `${url} returned ${theirs.status} to a non-admin instead of redirecting`);
+    }
+  });
+
+  await check('an unset ADMIN_EMAIL closes the monitor rather than opening it', async () => {
+    // The failure mode worth designing out: a blank setting matching every
+    // account whose email is falsy, or matching everyone.
+    const saved = cfg.adminEmail;
+    cfg.adminEmail = '';
+    try {
+      for (const who of [alice, bob, boss]) {
+        assert.strictEqual((await who('/api/usage')).status, 404);
+      }
+    } finally {
+      cfg.adminEmail = saved;
+    }
   });
 
   await check('the usage window is clamped rather than trusted', async () => {
     // days is user input that becomes a date range; an absurd or hostile value
     // must be bounded, not turned into a scan of all time.
     for (const [q, want] of [['0', 30], ['-5', 30], ['99999', 365], ['abc', 30], ['', 30], ['7', 7], ['365.9', 365]]) {
-      const r = await alice(`/api/usage?days=${q}`);
+      const r = await boss(`/api/usage?days=${q}`);
       assert.strictEqual(r.status, 200, `days=${q} → ${r.status}`);
       assert.strictEqual(r.body.days, want, `days=${q} became ${r.body.days}`);
     }

@@ -1,7 +1,11 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// usage.js — the /usage page. Read-only: fetch /api/usage and draw it.
+// usage.js — the /usage page: API spend across every account on this
+// deployment. Read-only: fetch /api/usage and draw it.
+//
+// Reachable only by the configured operator; the server enforces that on both
+// the page and the endpoint, so there is no permission logic in here.
 //
 // Deliberately standalone rather than another screen inside app.js. Nothing
 // here shares state with the task list, and app.js is already the largest file
@@ -65,12 +69,34 @@ function alt(n) {
   return `≈ ${s} ${display.currency}`;
 }
 
+/**
+ * A tighter number for the per-call rows, where the line also carries a time,
+ * an address and a cost. Full separators there push the token counts into an
+ * ellipsis, and a truncated number is worse than a rounded one.
+ */
+function tight(n) {
+  if (!Number.isFinite(n)) return '—';
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1e6).toFixed(1)}M`;
+}
+
 /** Thousands separators, and k/M once the digits stop being readable. */
 function num(n) {
   if (!Number.isFinite(n)) return '—';
   if (n < 10000) return n.toLocaleString();
   if (n < 1e6) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1e6).toFixed(2)}M`;
+}
+
+/**
+ * Just the local part of an address. The recent-calls row already carries a
+ * timestamp and two token counts, and a full address pushes the numbers off
+ * the end of a phone-width line; the per-account table above shows addresses
+ * in full, so nothing is actually hidden.
+ */
+function shortEmail(email) {
+  return String(email || '').split('@')[0] || '—';
 }
 
 function when(ms) {
@@ -143,7 +169,8 @@ function render(d) {
 
   $('#range').textContent =
     `${new Date(d.from).toLocaleDateString([], { day: 'numeric', month: 'short' })} – today`;
-  $('#eyebrow').textContent = `Running on ${d.current_model.label}`;
+  $('#eyebrow').textContent =
+    `All accounts · running on ${d.current_model.label}`;
 
   const cur = d.current_model;
   const totalAlt = alt(d.overall.cost_usd);
@@ -154,7 +181,8 @@ function render(d) {
       el('div', { class: 'u-total' }, usd(d.overall.cost_usd)),
       totalAlt ? el('div', { class: 'u-total-alt' }, totalAlt) : null,
       el('div', { class: 'u-sub' },
-        `${num(d.overall.calls)} message${d.overall.calls === 1 ? '' : 's'} extracted · last ${d.days} days`),
+        `${num(d.overall.calls)} message${d.overall.calls === 1 ? '' : 's'} extracted`
+        + ` across ${d.accounts} account${d.accounts === 1 ? '' : 's'} · last ${d.days} days`),
     ]),
 
     head('Cost'),
@@ -181,6 +209,17 @@ function render(d) {
     head('Daily spend'),
     chart(d.by_day, d.from, d.to),
 
+    // ---- who is spending it. The point of the whole page.
+    head('By account', d.by_user.length === 0
+      ? 'Nobody has forwarded anything in this period.'
+      : 'Ordered by spend.'),
+    d.by_user.length > 0
+      ? group(d.by_user.map((u) => [
+          u.email,
+          `${usd(u.cost_usd)} · ${num(u.calls)} msg`,
+        ]))
+      : null,
+
     // ---- only meaningful once more than one model has been used
     d.by_model.length > 1 ? head('By model', 'History keeps the price it was charged at.') : null,
     d.by_model.length > 1
@@ -197,12 +236,12 @@ function render(d) {
       ? group(d.failures.map((f) => [f.stop_reason, `${f.n} · ${usd(f.cost_usd)}`]))
       : null,
 
-    head('Recent calls'),
+    head('Recent calls', 'Cost, then input/output tokens.'),
     d.recent.length === 0
       ? el('p', { class: 'sheet-note' }, 'Nothing yet.')
       : group(d.recent.map((r) => [
-          when(r.at),
-          `${usd(r.cost_usd)} · ${num(r.input_tokens)} in / ${num(r.output_tokens)} out`,
+          `${when(r.at)} · ${shortEmail(r.email)}`,
+          `${usd(r.cost_usd)} · ${tight(r.input_tokens)}/${tight(r.output_tokens)}`,
           r.stop_reason && r.stop_reason !== 'end_turn' ? 'u-warn' : '',
         ])),
 

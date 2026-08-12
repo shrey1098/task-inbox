@@ -227,11 +227,21 @@ function createApp() {
     return res.redirect('/login.html');
   });
 
-  // A real path of its own rather than a section buried in the account sheet:
-  // spend is something you go and look at deliberately, and a URL can be
-  // bookmarked. It sits after the auth gate above, so it is private like the
-  // rest of the app — /usage.html is deliberately NOT in PUBLIC_FILES.
-  app.get('/usage', (req, res) => {
+  // The operator's monitor. A real path of its own rather than a section
+  // buried in the account sheet: it is something you go and look at
+  // deliberately, and a URL can be bookmarked.
+  //
+  // Gated here as well as on /api/usage. The API check is the one that
+  // actually protects the data — the page holds no numbers of its own — but
+  // serving the shell to everyone would still advertise that a cross-account
+  // monitor exists, so it is withheld too.
+  //
+  // Both the pretty path and the underlying file are matched. The file has to
+  // be listed explicitly because express.static below would otherwise serve
+  // it, quietly leaving the shell reachable for anyone who guessed the name.
+  app.get(['/usage', '/usage.html'], (req, res) => {
+    const email = String(req.user?.email || '').toLowerCase();
+    if (config.adminEmail === '' || email !== config.adminEmail) return res.redirect('/');
     res.sendFile(path.join(config.rootDir, 'public', 'usage.html'));
   });
 
@@ -327,6 +337,29 @@ function createApp() {
   // A Router groups the API endpoints so they can be mounted under /api below.
   const api = catchAsync(express.Router());
   api.use(auth.requireAuth); // every route below needs a signed-in user
+
+  /**
+   * Gate for the one cross-account view in the app.
+   *
+   * isAdmin is a single email comparison rather than a flag on the user
+   * document, and that is on purpose: a stored flag can be set by any code
+   * path that writes a user (signup, settings, a future import), whereas this
+   * cannot be granted at runtime at all — changing who is the operator means
+   * changing an environment variable and restarting.
+   *
+   * An empty ADMIN_EMAIL disables the monitor outright rather than matching
+   * every account with a blank email, which is the failure mode a naive
+   * comparison would have.
+   */
+  const isAdmin = (user) =>
+    config.adminEmail !== '' && String(user?.email || '').toLowerCase() === config.adminEmail;
+
+  const requireAdmin = (req, res, next) => {
+    if (isAdmin(req.user)) return next();
+    log.warn(`non-admin ${req.user.email} asked for ${req.originalUrl}`);
+    // 404, not 403 — see the note on the /usage route below.
+    return res.status(404).json({ error: 'not found' });
+  };
 
   // GET /api/tasks?status=open — the dashboard's main read.
   api.get('/tasks', async (req, res) => {
@@ -465,17 +498,21 @@ function createApp() {
   });
 
   /**
-   * GET /api/usage?days=30 — what this account has spent on the Claude API.
+   * GET /api/usage?days=30 — API spend across EVERY account.
    *
-   * Scoped to req.user.id like every other endpoint here: your spend is your
-   * data, and one account can never see another's, so this is safe to expose
-   * to ordinary users rather than being an admin-only view.
+   * This is the one endpoint in the app that deliberately crosses the tenancy
+   * boundary, so it is the one endpoint with an authorization check beyond
+   * "are you signed in": only config.adminEmail may call it. Everyone else
+   * gets a 404 rather than a 403 — a 403 confirms the route exists and that
+   * somebody is privileged on it, and there is no reason to tell a signed-in
+   * stranger either. The same reasoning already governs cross-tenant task
+   * reads, which also answer 404.
    *
    * Costs come from the stored per-call figures, not from re-pricing at read
    * time, so a switch of model — or a price change — leaves the history
    * telling the truth about what was actually charged.
    */
-  api.get('/usage', async (req, res) => {
+  api.get('/usage', requireAdmin, async (req, res) => {
     // Two different situations, deliberately handled differently: a value that
     // is not a positive number at all ("abc", "0", "-5") is not a window, so
     // it falls back to the default; a real but extreme one is clamped rather
@@ -486,9 +523,10 @@ function createApp() {
     const to = Date.now();
     const from = to - days * 86400000;
 
+    // null, explicitly: every account. Only reachable past requireAdmin.
     const [summary, recent] = await Promise.all([
-      dbModule.usageSummary(req.user.id, from, to, config.timezone),
-      dbModule.recentUsage(req.user.id, 20),
+      dbModule.usageSummary(null, from, to, config.timezone),
+      dbModule.recentUsage(null, 25),
     ]);
 
     const zero = {
@@ -507,10 +545,29 @@ function createApp() {
       ...m,
     }));
 
+    // Attribute the aggregated rows to people. One extra query rather than a
+    // $lookup, because the account list is tiny and a join here would bind the
+    // ledger's shape to the users collection for no gain.
+    const ids = new Set([
+      ...summary.by_user.map((u) => u._id),
+      ...recent.map((r) => r.user_id),
+    ]);
+    const emails = new Map((await dbModule.emailsForIds(ids)).map((u) => [u.id, u.email]));
+    // A deleted account leaves its spend behind — that history is real and
+    // should still total, so it is labelled rather than dropped.
+    const nameOf = (id) => emails.get(id) ?? `account #${id} (deleted)`;
+
+    const byUser = summary.by_user
+      .map(({ _id, ...u }) => ({ user_id: _id, email: nameOf(_id), ...u }));
+
     const current = config.anthropic.model;
     const rates = ratesAt(current);
 
     res.json({
+      // Says plainly what this is looking at, so the page never has to guess
+      // whether it is showing one account or all of them.
+      scope: 'all-accounts',
+      accounts: byUser.length,
       days,
       from,
       to,
@@ -529,7 +586,8 @@ function createApp() {
       by_model: byModel,
       by_day: summary.by_day.map(({ _id, ...d }) => ({ day: _id, ...d })),
       failures: summary.failures.map(({ _id, ...f }) => ({ stop_reason: _id, ...f })),
-      recent,
+      by_user: byUser,
+      recent: recent.map(({ user_id, ...r }) => ({ ...r, email: nameOf(user_id) })),
     });
   });
 
@@ -539,6 +597,10 @@ function createApp() {
       email: req.user.email,
       tg_linked: req.user.tg_chat_id != null,
       link_code: req.user.link_code,
+      // Drives whether the account sheet offers the usage monitor. Purely
+      // cosmetic — the endpoint enforces this itself, so a client that lies
+      // to itself about this gains nothing.
+      is_admin: isAdmin(req.user),
     });
   });
 
