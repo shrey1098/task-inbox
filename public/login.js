@@ -16,7 +16,7 @@ let mode = 'login'; // 'login' | 'signup'
 const TEXT = {
   login: {
     title: 'Welcome back',
-    sub: 'Sign in to your task inbox.',
+    sub: 'Wilco. Your taskings, sorted.',
     submit: 'Sign in',
     toggle: 'Create an account',
     autocomplete: 'current-password',

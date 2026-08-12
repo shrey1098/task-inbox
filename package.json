@@ -1,7 +1,7 @@
 {
-  "name": "task-inbox",
+  "name": "wilco",
   "version": "1.0.0",
-  "description": "Forward messages to a Telegram bot; Claude extracts and prioritises tasks onto a dashboard.",
+  "description": "Wilco \u2014 forward a message to a Telegram bot; Claude turns it into a tracked, prioritised tasking.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {

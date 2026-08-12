@@ -1,4 +1,4 @@
-# Task Inbox — production image.
+# Wilco — production image.
 #
 # One stage, because there is nothing to build: no bundler, no transpiler, no
 # TypeScript. The whole app is the source you can read in src/ and public/.

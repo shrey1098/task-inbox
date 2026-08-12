@@ -671,6 +671,10 @@ main {
 body:has(#refresh-pill:not([hidden])) .toast {
   bottom: calc(124px + env(safe-area-inset-bottom));
 }
+/* Three things want the bottom of the screen. When the install banner is up it
+   takes the spot and the other two step above it. */
+body:has(#install-banner) .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+body:has(#install-banner) .refresh-pill { bottom: calc(148px + env(safe-area-inset-bottom)); }
 
 /* A newly arrived row flashes once in the accent colour, so a list that
    changed while you were looking at it does not do so silently. */
@@ -683,6 +687,52 @@ body:has(#refresh-pill:not([hidden])) .toast {
 /* The "Updated 14:32" line doubles as a manual refresh, so there is always a
    way to force one even if the event stream never connected. */
 .subtitle { cursor: pointer; }
+
+/* --------------------------------------------------------- install banner */
+
+/* Sits at the bottom, above the tab bar. On iOS that also puts it next to
+   Safari's Share button, which is where the arrow is pointing. */
+.install-banner {
+  position: fixed; z-index: 45;
+  left: 12px; right: 12px; bottom: calc(70px + env(safe-area-inset-bottom));
+  max-width: 536px; margin: 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 12px 12px 14px;
+  background: color-mix(in srgb, var(--bg-cell) 92%, transparent);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: .5px solid var(--separator); border-radius: 18px;
+  box-shadow: 0 12px 40px -12px rgb(0 0 0 / .45);
+  /* Starts off-screen and slides up once .on is added, so it arrives rather
+     than appearing. */
+  translate: 0 calc(100% + 90px);
+  transition: translate .42s var(--ease);
+}
+.install-banner.on { translate: 0 0; }
+
+.install-banner .ib-icon { flex: none; border-radius: 10px; }
+.install-banner .ib-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.install-banner .ib-body b { font-size: 14.5px; font-weight: 650; letter-spacing: -.01em; }
+.install-banner .ib-body span { font-size: 12.5px; color: var(--label-2); line-height: 1.3; }
+
+.install-banner .ib-cta {
+  flex: none; padding: 9px 16px; border-radius: 999px;
+  background: var(--tint); color: var(--on-tint);
+  font-size: 14px; font-weight: 650;
+}
+.install-banner .ib-cta:active { scale: .96; }
+
+/* iOS has no install API, so instead of a button there is an arrow pointing
+   down at the Share control in Safari's toolbar. */
+.install-banner .ib-arrow { flex: none; color: var(--tint); display: grid; place-items: center; }
+@media (prefers-reduced-motion: no-preference) {
+  .install-banner .ib-arrow { animation: point-down 1.8s ease-in-out infinite; }
+}
+@keyframes point-down { 50% { translate: 0 4px; } }
+
+.install-banner .ib-x {
+  flex: none; color: var(--label-3); font-size: 20px; line-height: 1;
+  padding: 2px 4px; align-self: flex-start;
+}
 
 /* ------------------------------------------------------------------ toast */
 

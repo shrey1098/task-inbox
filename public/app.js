@@ -1052,7 +1052,11 @@ const TAB_TITLES = { inbox: 'Inbox', calendar: 'Calendar', people: 'People', don
 
 function render() {
   const searching = state.search != null;
-  $('#page-title').textContent = searching ? 'Search' : TAB_TITLES[state.tab];
+  const title = searching ? 'Search' : TAB_TITLES[state.tab];
+  $('#page-title').textContent = title;
+  // The small title that fades in once the large one scrolls away has to match
+  // it — it was hard-coded to "Inbox" and stayed that way on every other tab.
+  $('.nav-title').textContent = title;
   // The priority filter only makes sense on the inbox.
   $('#seg').style.display = state.tab === 'inbox' && !searching ? '' : 'none';
 
@@ -1955,12 +1959,99 @@ if ('serviceWorker' in navigator) {
  * shows whichever of those two applies, and nothing at all once installed.
  */
 let installPrompt = null;
+
 addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault(); // stop Chrome's own mini-infobar; we have our own button
+  e.preventDefault(); // stop Chrome's own mini-infobar; we have our own banner
   installPrompt = e;
   renderInstall();
+  offerInstall();
 });
-addEventListener('appinstalled', () => { installPrompt = null; renderInstall(); });
+
+addEventListener('appinstalled', () => {
+  installPrompt = null;
+  $('#install-banner')?.remove();
+  renderInstall();
+  toast('Installed. Open it from your home screen.');
+});
+
+/* --- the automatic offer ------------------------------------------------- */
+
+/*
+ * Nobody goes looking in a settings screen for "install". The offer has to come
+ * to them — but an offer that reappears on every visit is an advert, so it is
+ * shown once and then left alone for a fortnight.
+ */
+const INSTALL_SNOOZE_KEY = 'wilco.install.snoozed';
+const INSTALL_SNOOZE_MS = 14 * DAY;
+const INSTALL_DELAY_MS = 2500; // let the list paint first
+
+function installSnoozed() {
+  const at = Number(localStorage.getItem(INSTALL_SNOOZE_KEY) || 0);
+  return Date.now() - at < INSTALL_SNOOZE_MS;
+}
+
+/** iOS has no install API at all — the only route is Share → Add to Home Screen. */
+const isIos = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
+  // iPadOS 13+ reports itself as a Mac, and a touchscreen is the giveaway.
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+/** On iOS only Safari can install. Chrome and Firefox there simply cannot. */
+const isIosSafari = () => isIos() && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
+
+/**
+ * Show the banner, if there is anything worth showing.
+ *
+ * Called both when Chrome hands us a prompt and, on a delay, at startup —
+ * because on iOS no event ever arrives and waiting for one would mean iPhone
+ * users never see the offer at all.
+ */
+function offerInstall() {
+  if (isInstalled() || installSnoozed()) return;
+  if ($('#install-banner')) return;              // already up
+  if (!installPrompt && !isIosSafari()) return;  // nothing useful to say here
+
+  const dismiss = () => {
+    localStorage.setItem(INSTALL_SNOOZE_KEY, String(Date.now()));
+    const node = $('#install-banner');
+    if (!node) return;
+    node.classList.remove('on');
+    // Let the slide-down finish before removing it.
+    setTimeout(() => node.remove(), 300);
+  };
+
+  const install = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    installPrompt = null; // a prompt can only be used once
+    // "dismissed" is a no for now, not for ever, but re-asking immediately
+    // would be obnoxious — the snooze applies either way.
+    if (outcome !== 'accepted') dismiss();
+    else $('#install-banner')?.remove();
+    renderInstall();
+  };
+
+  const banner = el('div', { class: 'install-banner', id: 'install-banner' }, [
+    el('img', { class: 'ib-icon', src: '/icons/icon-192.png', alt: '', width: 44, height: 44 }),
+    el('div', { class: 'ib-body' }, [
+      el('b', {}, 'Add Wilco to your home screen'),
+      el('span', {}, installPrompt
+        ? 'Opens full screen, loads instantly, works offline.'
+        : 'Tap Share, then “Add to Home Screen”.'),
+    ]),
+    // iOS gets no button, because there is no API to trigger — just an arrow
+    // pointing at the Share control in Safari's toolbar below.
+    installPrompt
+      ? el('button', { class: 'ib-cta', type: 'button', onclick: install }, 'Install')
+      : el('span', { class: 'ib-arrow', 'aria-hidden': 'true' },
+          icon('M12 4v14m0 0l-6-6m6 6l6-6', { size: 22, width: 2.4 })),
+    el('button', { class: 'ib-x', type: 'button', 'aria-label': 'Not now', onclick: dismiss }, '×'),
+  ]);
+
+  document.body.append(banner);
+  // Next frame, so the slide-up transition has a starting state to animate from.
+  requestAnimationFrame(() => banner.classList.add('on'));
+}
 
 /** True when running from the home screen rather than in a browser tab. */
 const isInstalled = () =>
@@ -1995,6 +2086,11 @@ function renderInstall() {
 
 refresh();
 connectStream();
+
+// The install offer, once the app has had a moment to draw itself. On Chrome
+// beforeinstallprompt has usually fired by now; on iOS nothing ever fires, so
+// this timer is the only thing that surfaces it there.
+setTimeout(offerInstall, INSTALL_DELAY_MS);
 
 // Coming back to the tab is a deliberate act, and the stream may have missed
 // events while the page was frozen in the background — so this one refetch

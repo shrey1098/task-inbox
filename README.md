@@ -1,4 +1,6 @@
-# Task Inbox
+# Wilco
+
+*Radio for "will comply" — what you say when someone hands you a job.*
 
 Forward WhatsApp messages that need action to a Telegram bot → Claude extracts the task(s), estimates urgency/importance/effort and resolves deadlines → tasks land in MongoDB with a deterministic priority score → an iOS-style web app shows them as **P1 / P2 / P3**.
 
@@ -19,7 +21,7 @@ Your WhatsApp account is never touched — you decide what gets forwarded.
 3. **Claude API key** — from [console.anthropic.com](https://console.anthropic.com).
 
 ```sh
-cd task-inbox
+cd wilco
 npm install
 cp .env.example .env   # fill in MONGODB_URI, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, TIMEZONE
 npm start
@@ -170,8 +172,8 @@ Runs anywhere that takes a Dockerfile. It is currently on **Railway** with
 **MongoDB Atlas M0** (free tier), which took about an hour end to end.
 
 ```sh
-docker build -t task-inbox .
-docker run -p 3200:3200 --env-file .env task-inbox
+docker build -t wilco .
+docker run -p 3200:3200 --env-file .env wilco
 ```
 
 Environment for a hosted deploy:
