@@ -78,13 +78,13 @@
   --nav-h: 44px; /* standard iOS navigation bar height */
 
   /* Bottom padding for anything pinned to the bottom edge. The raw inset is
-     34px on a notched iPhone, which is generous: it reserves the whole home
-     indicator strip and then some, so the tab bar ends up visibly floating
-     above the bottom of the screen. The indicator itself is about 21px, so
-     trimming 14px still clears it while letting the bar sit where a native
-     tab bar sits. Falls back to a hairline in a browser tab, where the inset
-     is 0 and there is no indicator to avoid. */
-  --safe-b: max(2px, calc(env(safe-area-inset-bottom) - 14px));
+     34px on a notched iPhone, which reserves the whole home indicator strip
+     and then some — the tab bar ends up floating well clear of the bottom of
+     the screen. The indicator pill itself is about 5px tall sitting ~8px up,
+     so trimming 22px leaves 12px: still nothing overlapping it, but the bar
+     sits down where a native tab bar sits. Falls back to a hairline in a
+     browser tab, where the inset is 0 and there is no indicator to avoid. */
+  --safe-b: max(2px, calc(env(safe-area-inset-bottom) - 22px));
   /* The tab bar's full height, so everything that has to stay above it can
      say so without re-deriving the sum. */
   --tabbar-h: calc(49px + var(--safe-b));
@@ -701,6 +701,24 @@ main {
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
   border-top: .5px solid var(--separator);
+}
+
+/* The bar is anchored at bottom: 0, so in principle its box already reaches
+   the bottom of the screen. On an installed iOS home-screen app it does not
+   always get there — the strip over the home indicator can be left showing
+   the page background, which in dark mode is a black band under the bar.
+   This bleeds the bar's own fill downwards past its box to cover whatever
+   that band is. If there is no band, it simply falls off the bottom of the
+   viewport and is clipped, so it costs nothing on the platforms that were
+   already correct. No backdrop-filter here: there is nothing behind this
+   strip to blur, and asking for one inside an already-filtered parent is
+   how you get a visible seam. */
+.tabbar::after {
+  content: "";
+  position: absolute; left: 0; right: 0;
+  top: 100%; height: 80px;
+  background: color-mix(in srgb, var(--bg-cell) 72%, transparent);
+  pointer-events: none;
 }
 .tabbar button {
   flex: 1; padding: 6px 0 3px;
