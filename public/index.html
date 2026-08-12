@@ -12,7 +12,11 @@
 <meta charset="utf-8">
 <!-- viewport-fit=cover lets the page extend under the notch and home indicator,
      which is what makes env(safe-area-inset-*) meaningful. -->
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- maximum-scale + user-scalable=no: an installed app should not pinch-zoom
+     or double-tap-zoom like a web page. Safari ignores these in a normal tab
+     (deliberately, for accessibility) and honours them once installed, which
+     is exactly the split we want. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <!-- Standalone display + status-bar style, so "Add to Home Screen" on an
      iPhone launches this without Safari chrome around it. -->
@@ -20,7 +24,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Wilco">
 <title>Wilco</title>
-<link rel="icon" href="/icons/icon-192.png"><text y='.9em' font-size='90'>📥</text></svg>">
+<link rel="icon" href="/icons/icon-192.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <!-- iOS ignores the manifest's icons and uses this one. -->
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">

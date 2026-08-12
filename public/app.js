@@ -1558,11 +1558,13 @@ function summaryView(s) {
 
 /* ------------------------------------------------------------ interactions */
 
-// Collapse the large title once the page scrolls, the signature iOS behaviour.
+// Collapse the large title once the list scrolls, the signature iOS behaviour.
+// The listener is on <main>, not on the window: the document is locked so it
+// never scrolls, and window.scrollY would be permanently 0.
 // A passive listener tells the browser we will not preventDefault, so scrolling
 // stays on the compositor and never janks.
-addEventListener('scroll', () => {
-  $('#nav').classList.toggle('scrolled', scrollY > 24);
+$('#main').addEventListener('scroll', (e) => {
+  $('#nav').classList.toggle('scrolled', e.target.scrollTop > 24);
 }, { passive: true });
 
 // Segmented control.
@@ -1581,7 +1583,7 @@ $('#tabbar').addEventListener('click', (e) => {
   state.person = undefined; // leaving People resets the drill-down
   closeSearch();
   for (const b of $$('#tabbar button')) b.classList.toggle('on', b === btn);
-  scrollTo({ top: 0 });
+  $('#main').scrollTop = 0;
   render();
 });
 

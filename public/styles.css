@@ -147,7 +147,31 @@
    overrides it. Several things here are flex when visible, so make hidden win. */
 [hidden] { display: none !important; }
 
+/*
+ * The document itself never scrolls.
+ *
+ * A web page scrolls its <body>, which on iOS means the whole thing rubber-
+ * bands: drag down and the header, the status bar area and all of it slides
+ * with your finger. No native app does that. Locking the document and giving
+ * <main> its own scroller is what removes it — the header is then a sibling of
+ * the scrolling region rather than something riding on top of it.
+ *
+ * position: fixed on the body is the part that actually pins it in mobile
+ * Safari; overflow: hidden alone is not enough there.
+ */
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none; /* no pull-to-refresh, no scroll chaining */
+  /* Removes the 300ms wait for a possible double-tap, which is both a zoom
+     nobody wants and the reason taps can feel sluggish. */
+  touch-action: manipulation;
   margin: 0;
   background: var(--bg-grouped);
   color: var(--label);
@@ -193,13 +217,21 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 :focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; border-radius: 6px; }
 
 /* On a phone this fills the screen; on a desktop it stays a phone-width column,
-   which is how Apple's own web apps present iPhone-shaped UIs. */
-.app { max-width: 560px; margin: 0 auto; min-height: 100dvh; }
+   which is how Apple's own web apps present iPhone-shaped UIs.
+   A column flexbox: the header takes its natural height and main takes the
+   rest, which is what gives main a definite height to scroll inside. */
+.app {
+  max-width: 560px; margin: 0 auto;
+  height: 100%;
+  display: flex; flex-direction: column;
+}
 
 /* ---------------------------------------------------------------- nav bar */
 
 #nav {
-  position: sticky; top: 0; z-index: 30;
+  /* Not sticky any more: it is a flex sibling of the scroller, so it simply
+     cannot move. Sticky was what allowed it to drift during an overscroll. */
+  flex: none; position: relative; z-index: 30;
   /* Installed to the home screen with viewport-fit=cover and a translucent
      status bar, the page starts at the very top of the display — underneath
      the clock and the battery. This is the padding that pushes the nav clear
@@ -297,6 +329,12 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 /* ------------------------------------------------------------------ main */
 
 main {
+  /* The one scrolling element in the app. */
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;              /* nothing may scroll sideways, ever */
+  overscroll-behavior-y: contain;  /* the bounce stops here, it does not chain */
+  -webkit-overflow-scrolling: touch;
   padding:
     0
     max(16px, env(safe-area-inset-right))
