@@ -47,6 +47,7 @@ function makeFakeDb(events) {
   const sessions = [];
   const tasks = [];
   const messages = [];
+  const usage = [];
   const state = new Map();
   const seq = { users: 0, tasks: 0, messages: 0 };
 
@@ -61,7 +62,7 @@ function makeFakeDb(events) {
 
   const db = {
     /* --- test controls, not part of the real db.js surface --- */
-    _users: users, _tasks: tasks, _sessions: sessions, _messages: messages,
+    _users: users, _tasks: tasks, _sessions: sessions, _messages: messages, _usage: usage,
     _failNextCallTo: (name) => { failNext = name; },
 
     connect: async () => {}, close: async () => {},
@@ -219,6 +220,50 @@ function makeFakeDb(events) {
       .map((t) => ({ id: t.id, title: t.title, requester: t.requester, due_at: t.due_at })),
     recentMessagesForChat: async () => [],
     listNudgeCandidates: async () => [],
+
+    /* --- the API-spend ledger --- */
+    recordUsage: async (uid, row) => void usage.push({ user_id: uid, ...row }),
+    // Mirrors the real $facet aggregation closely enough to prove the tenancy
+    // boundary and the response shape. The arithmetic is deliberately
+    // reimplemented rather than shared with db.js: a double that delegated to
+    // the real summariser would still pass if the real query lost its
+    // user_id filter, which is the one thing this most needs to catch.
+    usageSummary: async (uid, from, to) => {
+      const rows = usage.filter((r) => r.user_id === uid && r.at >= from && r.at <= to);
+      const tot = (list) => list.reduce((a, r) => ({
+        calls: a.calls + 1,
+        input_tokens: a.input_tokens + (r.input_tokens || 0),
+        output_tokens: a.output_tokens + (r.output_tokens || 0),
+        cache_read_input_tokens: a.cache_read_input_tokens + (r.cache_read_input_tokens || 0),
+        cache_creation_input_tokens:
+          a.cache_creation_input_tokens + (r.cache_creation_input_tokens || 0),
+        cost_usd: a.cost_usd + (r.cost_usd || 0),
+      }), {
+        calls: 0, input_tokens: 0, output_tokens: 0,
+        cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0,
+      });
+      const groupBy = (key) => {
+        const map = new Map();
+        for (const r of rows) {
+          const k = typeof key === 'function' ? key(r) : r[key];
+          map.set(k, [...(map.get(k) ?? []), r]);
+        }
+        return [...map].map(([_id, list]) => ({ _id, ...tot(list) }));
+      };
+      return {
+        overall: rows.length ? [{ _id: null, ...tot(rows) }] : [],
+        by_model: groupBy('model'),
+        by_day: groupBy((r) => new Date(r.at).toISOString().slice(0, 10)),
+        failures: groupBy('stop_reason')
+          .filter((g) => g._id && g._id !== 'end_turn')
+          .map((g) => ({ _id: g._id, n: g.calls, cost_usd: g.cost_usd })),
+      };
+    },
+    recentUsage: async (uid, limit = 20) => usage
+      .filter((r) => r.user_id === uid)
+      .sort((a, b) => b.at - a.at)
+      .slice(0, limit)
+      .map(({ user_id, ...r }) => r),
 
     addProgress: async (uid, id, text) => {
       const t = tasks.find((x) => x.id === id && x.user_id === uid);

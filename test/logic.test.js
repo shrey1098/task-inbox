@@ -9,6 +9,7 @@ const { normaliseRule, nextOccurrence, describeRule, buildNextOccurrence } = req
 const { streakFrom, levelForXp, xpForTask } = require(path.join(ROOT, 'stats'));
 const { parsePeriod } = require(path.join(ROOT, 'summary'));
 const { scoreTask, rankRequester, bucketOf } = require(path.join(ROOT, 'priority'));
+const { costOf, ratesAt, supportsEffort, labelFor, modelInfo } = require(path.join(ROOT, 'pricing'));
 
 let pass = 0, fail = 0;
 const results = [];
@@ -207,6 +208,58 @@ check('nonsense periods are rejected rather than guessed at', () => {
   assert.strictEqual(parsePeriod('whenever'), null);
   assert.strictEqual(parsePeriod('9999999 days'), null);
   assert.strictEqual(parsePeriod('2026-08-11..2026-08-01'), null, 'backwards range');
+});
+
+/* ----------------------------------------------------------------- pricing */
+
+check('a call is priced from the per-million rates for its model', () => {
+  // Haiku 4.5: $1 in, $5 out per million.
+  const cost = costOf({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 'claude-haiku-4-5');
+  assert.strictEqual(cost, 6);
+});
+
+check('cache reads and writes are priced apart from fresh input', () => {
+  // Reads are a tenth of the input rate, writes 1.25x. Lumping either in with
+  // input_tokens would over- or under-charge silently.
+  const reads = costOf({ cache_read_input_tokens: 1_000_000 }, 'claude-haiku-4-5');
+  const writes = costOf({ cache_creation_input_tokens: 1_000_000 }, 'claude-haiku-4-5');
+  assert.strictEqual(reads, 0.1);
+  assert.strictEqual(writes, 1.25);
+});
+
+check('a realistic extraction lands where the estimate said it would', () => {
+  // ~2,300 in / ~650 out on Haiku is fractions of a cent — the figure that
+  // justified the switch away from Opus. Guards against a stray factor of
+  // 1,000 in either direction.
+  const cost = costOf({ input_tokens: 2300, output_tokens: 650 }, 'claude-haiku-4-5');
+  assert.ok(cost > 0.004 && cost < 0.008, `expected ~$0.0056, got ${cost}`);
+
+  const onOpus = costOf({ input_tokens: 2300, output_tokens: 650 }, 'claude-opus-5');
+  assert.ok(onOpus / cost > 4, 'Opus should be several times dearer than Haiku');
+});
+
+check('introductory pricing applies before its date and not after', () => {
+  const during = ratesAt('claude-sonnet-5', Date.parse('2026-08-15T00:00:00Z'));
+  const after = ratesAt('claude-sonnet-5', Date.parse('2026-10-01T00:00:00Z'));
+  assert.strictEqual(during.input, 2);
+  assert.strictEqual(after.input, 3);
+});
+
+check('an unknown model is reported as unpriced, not guessed at', () => {
+  assert.strictEqual(costOf({ input_tokens: 5000 }, 'claude-something-7'), 0);
+  assert.strictEqual(modelInfo('claude-something-7').unknown, true);
+  // The raw id still shows, so unattributed traffic is visible on the page.
+  assert.strictEqual(labelFor('claude-something-7'), 'claude-something-7');
+});
+
+check('effort support is per-model — Haiku rejects it, Opus takes it', () => {
+  // Not cosmetic: sending output_config.effort to Haiku 4.5 is a 400, so this
+  // flag is the only thing stopping a model switch breaking every extraction.
+  assert.strictEqual(supportsEffort('claude-haiku-4-5'), false);
+  assert.strictEqual(supportsEffort('claude-opus-5'), true);
+  assert.strictEqual(supportsEffort('claude-sonnet-5'), true);
+  // An unknown model errs towards omitting the parameter.
+  assert.strictEqual(supportsEffort('claude-something-7'), false);
 });
 
 console.log(results.join('\n'));

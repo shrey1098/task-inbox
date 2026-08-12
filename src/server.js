@@ -18,6 +18,7 @@ const { bucketOf, explainScore, rescoreOpenTasks, scoreTask, rankRequester } = r
 const { describeRule, normaliseRule, completeTask } = require('./recurrence');
 const { gameStats, periodSummary, xpForTask } = require('./stats');
 const { parsePeriod } = require('./summary');
+const { labelFor, ratesAt, modelInfo } = require('./pricing');
 const events = require('./events');
 const auth = require('./auth');
 const { createLogger, colorize, dim } = require('./log');
@@ -224,6 +225,14 @@ function createApp() {
     if (req.path.startsWith('/api/')) return next(); // the API answers 401 itself
     if (PUBLIC_FILES.has(req.path)) return next();
     return res.redirect('/login.html');
+  });
+
+  // A real path of its own rather than a section buried in the account sheet:
+  // spend is something you go and look at deliberately, and a URL can be
+  // bookmarked. It sits after the auth gate above, so it is private like the
+  // rest of the app — /usage.html is deliberately NOT in PUBLIC_FILES.
+  app.get('/usage', (req, res) => {
+    res.sendFile(path.join(config.rootDir, 'public', 'usage.html'));
   });
 
   app.use(express.static(path.join(config.rootDir, 'public'), {
@@ -453,6 +462,75 @@ function createApp() {
   // GET /api/stats — counts per status, for the stat tiles.
   api.get('/stats', async (req, res) => {
     res.json({ counts: await dbModule.countByStatus(req.user.id) });
+  });
+
+  /**
+   * GET /api/usage?days=30 — what this account has spent on the Claude API.
+   *
+   * Scoped to req.user.id like every other endpoint here: your spend is your
+   * data, and one account can never see another's, so this is safe to expose
+   * to ordinary users rather than being an admin-only view.
+   *
+   * Costs come from the stored per-call figures, not from re-pricing at read
+   * time, so a switch of model — or a price change — leaves the history
+   * telling the truth about what was actually charged.
+   */
+  api.get('/usage', async (req, res) => {
+    // Two different situations, deliberately handled differently: a value that
+    // is not a positive number at all ("abc", "0", "-5") is not a window, so
+    // it falls back to the default; a real but extreme one is clamped rather
+    // than rejected, so a long window degrades to the longest allowed instead
+    // of erroring — and neither can turn into a scan of all history.
+    const asked = Number(req.query.days);
+    const days = Number.isFinite(asked) && asked > 0 ? Math.min(Math.round(asked), 365) : 30;
+    const to = Date.now();
+    const from = to - days * 86400000;
+
+    const [summary, recent] = await Promise.all([
+      dbModule.usageSummary(req.user.id, from, to, config.timezone),
+      dbModule.recentUsage(req.user.id, 20),
+    ]);
+
+    const zero = {
+      calls: 0, input_tokens: 0, output_tokens: 0,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0,
+    };
+    const overall = { ...zero, ...(summary.overall[0] ?? {}) };
+    delete overall._id;
+
+    const byModel = summary.by_model.map(({ _id, ...m }) => ({
+      model: _id,
+      label: labelFor(_id),
+      // Flagged so the page can say "unpriced" rather than quietly showing
+      // £0.00 for a model this build has never heard of.
+      unpriced: modelInfo(_id).unknown === true,
+      ...m,
+    }));
+
+    const current = config.anthropic.model;
+    const rates = ratesAt(current);
+
+    res.json({
+      days,
+      from,
+      to,
+      // Null unless the operator set both env vars — see config.display.
+      display: config.display.currency && config.display.rate ? config.display : null,
+      // What the next message will be charged at, so the page can project
+      // forward as well as report backwards.
+      current_model: {
+        id: current,
+        label: labelFor(current),
+        input_per_mtok: rates.input,
+        output_per_mtok: rates.output,
+        unpriced: rates.unknown,
+      },
+      overall,
+      by_model: byModel,
+      by_day: summary.by_day.map(({ _id, ...d }) => ({ day: _id, ...d })),
+      failures: summary.failures.map(({ _id, ...f }) => ({ stop_reason: _id, ...f })),
+      recent,
+    });
   });
 
   /** Who am I — drives the account sheet and the Telegram link status. */

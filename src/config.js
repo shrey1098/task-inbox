@@ -99,9 +99,16 @@ module.exports = {
 
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.ANTHROPIC_MODEL || 'claude-opus-5',
+    // Extraction is structured reading, not deep reasoning, so it runs on the
+    // cheapest capable model: Haiku 4.5 is roughly a fifth the cost per message
+    // of Opus 5. Raise this to claude-sonnet-5 (or an Opus) if deadlines start
+    // resolving wrongly or the requester/seniority judgement slips — the usage
+    // page prices whatever is set here, so the trade is measurable.
+    model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
     // How much reasoning the model spends per message. Extraction is a simple
     // job, so 'low' keeps it fast and cheap; raise if classifications feel off.
+    // Ignored on models that do not accept it (Haiku 4.5 rejects it outright)
+    // — the extractor consults pricing.js and omits the field there.
     effort: process.env.ANTHROPIC_EFFORT || 'low',
   },
 
@@ -130,4 +137,15 @@ module.exports = {
   // IANA timezone (e.g. "Asia/Kolkata"). Passed to the model so it can turn
   // "by Friday" into a real timestamp in YOUR local time rather than UTC.
   timezone: process.env.TIMEZONE || 'UTC',
+
+  // Optional second currency on the usage page. Anthropic bills in dollars, so
+  // dollars are always what is stored and shown; this only adds a convenience
+  // conversion beside it. There is no exchange-rate lookup on purpose — a rate
+  // baked into the code goes stale silently and quietly misreports money, so
+  // nothing is shown unless you set a rate you chose yourself.
+  //   DISPLAY_CURRENCY=INR DISPLAY_RATE=88
+  display: {
+    currency: process.env.DISPLAY_CURRENCY || null,
+    rate: Number(process.env.DISPLAY_RATE) > 0 ? Number(process.env.DISPLAY_RATE) : null,
+  },
 };

@@ -277,6 +277,44 @@ const PROTECTED = [
     assert.strictEqual(after.body.progress.length, 0);
   });
 
+  await check('usage and cost are per-account, never pooled', async () => {
+    const aliceUser = fakeDb._users.find((u) => u.email === 'alice@example.com');
+    const bobUser = fakeDb._users.find((u) => u.email === 'bob@example.com');
+    const now = Date.now();
+
+    // Alice spends; Bob spends more, on a different model.
+    fakeDb._usage.push({
+      user_id: aliceUser.id, at: now, message_id: 1, model: 'claude-haiku-4-5',
+      input_tokens: 2000, output_tokens: 500, cost_usd: 0.0045, stop_reason: 'end_turn',
+    });
+    fakeDb._usage.push({
+      user_id: bobUser.id, at: now, message_id: 2, model: 'claude-opus-5',
+      input_tokens: 9000, output_tokens: 4000, cost_usd: 0.145, stop_reason: 'end_turn',
+    });
+
+    const a = (await alice('/api/usage?days=30')).body;
+    assert.strictEqual(a.overall.calls, 1, 'alice sees a call that is not hers');
+    assert.ok(Math.abs(a.overall.cost_usd - 0.0045) < 1e-9, 'alice’s total includes bob’s spend');
+    assert.deepStrictEqual(a.by_model.map((m) => m.model), ['claude-haiku-4-5']);
+    // Bob's much larger figure must not leak through any facet of the response.
+    assert.ok(!JSON.stringify(a).includes('claude-opus-5'), 'bob’s model leaked to alice');
+    assert.strictEqual(a.recent.length, 1);
+
+    const b = (await bob('/api/usage?days=30')).body;
+    assert.strictEqual(b.overall.calls, 1);
+    assert.ok(Math.abs(b.overall.cost_usd - 0.145) < 1e-9);
+  });
+
+  await check('the usage window is clamped rather than trusted', async () => {
+    // days is user input that becomes a date range; an absurd or hostile value
+    // must be bounded, not turned into a scan of all time.
+    for (const [q, want] of [['0', 30], ['-5', 30], ['99999', 365], ['abc', 30], ['', 30], ['7', 7], ['365.9', 365]]) {
+      const r = await alice(`/api/usage?days=${q}`);
+      assert.strictEqual(r.status, 200, `days=${q} → ${r.status}`);
+      assert.strictEqual(r.body.days, want, `days=${q} became ${r.body.days}`);
+    }
+  });
+
   await check('a PATCH cannot move a task to another account', async () => {
     const mine = await alice('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Stays mine' }) });
     const bobUser = fakeDb._users.find((u) => u.email === 'bob@example.com');

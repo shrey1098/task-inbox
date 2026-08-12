@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Usage · Wilco</title>
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<!--
+  The API-spend page. Its own path (/usage) rather than a panel inside the
+  account sheet: this is something you go and look at, and a URL can be
+  bookmarked. Everything here is read-only, so there is no save path to get
+  wrong — the page fetches /api/usage and renders it.
+-->
+<div class="app">
+
+  <header id="nav">
+    <div class="nav-bar">
+      <a class="nav-btn" href="/" aria-label="Back to inbox">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 5l-7 7 7 7"/>
+        </svg>
+      </a>
+      <span class="nav-title">Usage</span>
+    </div>
+    <div class="large-title-wrap">
+      <div class="large-title-inner">
+        <p class="eyebrow" id="eyebrow">API spend</p>
+        <h1 class="large-title">Usage</h1>
+        <p class="subtitle" id="range">Loading…</p>
+      </div>
+    </div>
+    <div class="chips picker" id="period">
+      <button data-days="7" type="button">7 days</button>
+      <button data-days="30" class="on" type="button">30 days</button>
+      <button data-days="90" type="button">90 days</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="content">
+      <div class="list"><div class="skeleton"></div><div class="skeleton"></div></div>
+    </div>
+  </main>
+
+</div>
+
+<script src="/usage.js"></script>
+</body>
+</html>

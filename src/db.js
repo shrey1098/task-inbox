@@ -91,6 +91,10 @@ async function connect() {
   // passes, so expired rows don't accumulate forever.
   await db.collection('sessions').createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
+  // The API-spend ledger. Every query it serves is "this account, this date
+  // range, newest first", so one compound index covers all of them.
+  await db.collection('usage').createIndex({ user_id: 1, at: -1 });
+
   return db;
 }
 
@@ -548,6 +552,85 @@ async function groupByRequester(userId) {
   ]).toArray();
 }
 
+/* ------------------------------------------------------------------ usage */
+
+/**
+ * Append one API call to the spend ledger.
+ *
+ * Append-only by design: rows are never updated, so there is no concurrency
+ * story to get wrong here, and the ledger stays an honest record of what was
+ * actually called rather than a running total that can drift.
+ */
+function recordUsage(userId, row) {
+  return db.collection('usage').insertOne({ user_id: userId, ...row });
+}
+
+/**
+ * Everything the usage page needs, in one round trip.
+ *
+ * $facet runs several independent aggregations over the same matched rows, so
+ * the totals, the per-model split and the daily series all come from one pass
+ * over one index range instead of three separate queries that could disagree
+ * with each other if a call landed between them.
+ */
+async function usageSummary(userId, from, to, tz = 'UTC') {
+  const match = { user_id: userId, at: { $gte: from, $lte: to } };
+
+  const totals = {
+    calls: { $sum: 1 },
+    input_tokens: { $sum: '$input_tokens' },
+    output_tokens: { $sum: '$output_tokens' },
+    cache_read_input_tokens: { $sum: { $ifNull: ['$cache_read_input_tokens', 0] } },
+    cache_creation_input_tokens: { $sum: { $ifNull: ['$cache_creation_input_tokens', 0] } },
+    cost_usd: { $sum: '$cost_usd' },
+  };
+
+  const [out] = await db.collection('usage').aggregate([
+    { $match: match },
+    {
+      $facet: {
+        overall: [{ $group: { _id: null, ...totals } }],
+        by_model: [
+          { $group: { _id: '$model', ...totals } },
+          { $sort: { cost_usd: -1 } },
+        ],
+        // Bucketed in the user's timezone, not UTC — a spend chart whose days
+        // break at 05:30 local is not a chart of your days.
+        by_day: [
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: '%Y-%m-%d', date: { $toDate: '$at' }, timezone: tz },
+              },
+              ...totals,
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+        // A refusal or a truncated reply still cost money; surfacing them
+        // separately explains a bill that does not match the task count.
+        failures: [
+          { $match: { stop_reason: { $nin: ['end_turn', null] } } },
+          { $group: { _id: '$stop_reason', n: { $sum: 1 }, cost_usd: { $sum: '$cost_usd' } } },
+          { $sort: { n: -1 } },
+        ],
+      },
+    },
+  ]).toArray();
+
+  return out ?? { overall: [], by_model: [], by_day: [], failures: [] };
+}
+
+/** The most recent calls, for the "recent activity" list. */
+function recentUsage(userId, limit = 20) {
+  return db.collection('usage')
+    .find({ user_id: userId })
+    .project({ _id: 0, user_id: 0 })
+    .sort({ at: -1 })
+    .limit(limit)
+    .toArray();
+}
+
 /** Recent open tasks, lightweight — what duplicate detection compares against. */
 function recentOpenTaskSummaries(userId, limit = 60) {
   return db.collection('tasks')
@@ -700,4 +783,7 @@ module.exports = {
   recentOpenTaskSummaries,
   recentMessagesForChat,
   listNudgeCandidates,
+  recordUsage,
+  usageSummary,
+  recentUsage,
 };

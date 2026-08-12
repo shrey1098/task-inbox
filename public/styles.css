@@ -695,7 +695,10 @@ main {
 }
 .btn-primary:active { scale: .985; }
 .btn-primary:disabled { opacity: .45; cursor: progress; }
+/* Worn by both <button> and <a>. An anchor gets none of a button's block
+   layout or text centring for free, so they are set explicitly here. */
 .btn-plain {
+  display: block; box-sizing: border-box; text-align: center; text-decoration: none;
   width: 100%; margin-top: 6px; padding: 12px; color: var(--tint);
   font-size: 17px; border-radius: var(--r-cell);
 }
@@ -1426,3 +1429,69 @@ body.locked { overflow: hidden; }
 }
 .link-hint { font-size: 13px; color: var(--label-2); text-align: center; margin: 0 0 12px; }
 .btn-danger { color: var(--red); }
+
+/* ------------------------------------------------------------- usage page */
+
+/* /usage reuses the app shell (locked body, one scrolling <main>) but none of
+   the sheet machinery, so its grouped lists get their own classes rather than
+   borrowing .sheet .group — which is positioned as a modal. */
+
+.u-hero {
+  text-align: center;
+  padding: 22px 0 10px;
+}
+.u-total {
+  font-size: 44px; font-weight: 800; letter-spacing: -.04em;
+  background: linear-gradient(100deg, var(--label), color-mix(in srgb, var(--label) 55%, var(--tint)));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.u-total-alt { font-size: 15px; font-weight: 600; color: var(--label-2); margin-top: 2px; }
+.u-sub { font-size: 13px; color: var(--label-2); margin-top: 6px; }
+
+.u-group {
+  background: var(--card-bg);
+  border: .5px solid var(--separator);
+  border-radius: var(--r-cell);
+  overflow: hidden; margin-bottom: 12px;
+}
+.u-line {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 11px 14px; font-size: 15px;
+}
+.u-line + .u-line { border-top: .5px solid var(--separator); }
+.u-line .k { color: var(--label-2); flex: none; }
+/* min-width:0 so a long value ellipsises instead of widening the row and
+   giving the page a horizontal scrollbar. */
+.u-line .v {
+  margin-left: auto; min-width: 0; text-align: right;
+  font-variant-numeric: tabular-nums;   /* figures line up down the column */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Modifier classes are namespaced too, not just the blocks: a bare .warn or
+   .empty here would pick up the unrelated component of that name elsewhere in
+   this file — which is exactly what happened, twice. */
+.u-line .v.u-warn { color: var(--orange); }
+
+/* The daily bars. Fixed height so the row never reflows as data loads. */
+.u-chart {
+  display: flex; align-items: flex-end; gap: 2px;
+  height: 90px; margin: 2px 0 14px;
+  padding: 0 2px;
+}
+.u-bar-slot { flex: 1; height: 100%; display: flex; align-items: flex-end; min-width: 0; }
+.u-bar {
+  width: 100%; border-radius: 2px 2px 0 0;
+  background: linear-gradient(180deg, var(--tint), color-mix(in srgb, var(--tint) 55%, transparent));
+  min-height: 2px;
+}
+/* A day with no calls is drawn as a hairline rather than omitted — a gap in
+   the series is information, and a missing bar would silently compress time.
+   Named "quiet" rather than "empty" because .empty is already the list's
+   empty-state block, whose 24px side padding would inflate every gap day. */
+.u-bar.quiet { height: 2px !important; background: var(--bg-tint); }
+
+.u-foot {
+  font-size: 12px; color: var(--label-3); line-height: 1.5;
+  margin: 18px 2px 0;
+}

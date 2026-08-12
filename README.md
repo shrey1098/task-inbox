@@ -185,6 +185,8 @@ Environment for a hosted deploy:
 | `NODE_ENV=production` | |
 | `TIMEZONE` | The digest and the weekly review fire on this one zone for all users. |
 | `ALLOW_SIGNUP` | Set to `false` once your accounts exist. |
+| `ANTHROPIC_MODEL` | Defaults to `claude-haiku-4-5`. Every call is priced and shown at `/usage`, so changing this is a measurable trade rather than a guess. |
+| `DISPLAY_CURRENCY` / `DISPLAY_RATE` | Optional second currency on `/usage`. Both must be set; there is no exchange-rate lookup. |
 
 Two deployment notes learned the hard way:
 
@@ -319,7 +321,7 @@ New-NetFirewallRule -DisplayName "Task Inbox" -Direction Inbound `
 Output is timestamped and scoped, and colourised when the terminal supports it:
 
 ```
-18:41:50.641 INFO  app       starting — model claude-opus-5, effort low, tz Asia/Kolkata
+18:41:50.641 INFO  app       starting — model claude-haiku-4-5, effort low, tz Asia/Kolkata
 18:41:50.642 INFO  app       mongo connected — task_inbox
 18:41:50.660 INFO  http      listening on 0.0.0.0:3200
 18:41:50.661 INFO  telegram  polling as @task_me_bot

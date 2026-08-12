@@ -16,6 +16,7 @@ const config = require('./config');
 const dbModule = require('./db');
 const { scoreTask, rankRequester } = require('./priority');
 const { normaliseRule } = require('./recurrence');
+const { supportsEffort, costOf } = require('./pricing');
 const { createLogger } = require('./log');
 
 const log = createLogger('extract');
@@ -215,6 +216,37 @@ async function callModel(params) {
 }
 
 /**
+ * Write one call's token usage and dollar cost to the ledger.
+ *
+ * Never throws. Accounting is observability, not the job: an extraction that
+ * worked must not be turned into a failure because the ledger write did not.
+ * A dropped row shows up as a slightly low total, which is a far better
+ * outcome than a lost task.
+ */
+async function recordUsage(message, model, response) {
+  try {
+    const u = response?.usage;
+    if (!u) return; // no usage block (older SDK, or a stubbed client in tests)
+
+    const at = Date.now();
+    await dbModule.recordUsage(message.user_id, {
+      at,
+      message_id: message.id,
+      model,
+      input_tokens: u.input_tokens ?? 0,
+      output_tokens: u.output_tokens ?? 0,
+      cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+      cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+      // Priced now, at today's rates, and stored — see pricing.js/costOf.
+      cost_usd: costOf(u, model, at),
+      stop_reason: response.stop_reason ?? null,
+    });
+  } catch (err) {
+    log.warn(`usage not recorded for message #${message.id}: ${err.message}`);
+  }
+}
+
+/**
  * Run one message through Claude and return task field objects, not yet saved.
  * Throws on failure so the caller can mark the message for retry.
  */
@@ -266,18 +298,30 @@ async function extractTasks(message, { context = [], existing = [], seniors = []
     text: `${contextLines.join('\n')}\n\nMessage:\n"""\n${message.text || '(no caption — read the image)'}\n"""`,
   });
 
+  const model = config.anthropic.model;
+
+  // effort is not universal. Haiku 4.5 and Sonnet 4.5 reject it outright with
+  // a 400, so it is added only for models that take it — otherwise switching
+  // ANTHROPIC_MODEL to a cheaper model would break every extraction rather
+  // than just costing less. pricing.js owns the per-model answer.
+  const outputConfig = { format: { type: 'json_schema', schema: OUTPUT_SCHEMA } };
+  if (supportsEffort(model)) outputConfig.effort = config.anthropic.effort;
+
   const { response, parsed } = await callModel({
-    model: config.anthropic.model,
+    model,
     // max_tokens caps thinking AND the reply together. 8192 is generous for a
     // small JSON object; too tight and a long message truncates mid-object.
     max_tokens: 8192,
-    output_config: {
-      effort: config.anthropic.effort, // how hard the model thinks (see config)
-      format: { type: 'json_schema', schema: OUTPUT_SCHEMA }, // the guarantee
-    },
+    output_config: outputConfig,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content }],
   });
+
+  // Record the spend before inspecting the reply. A refusal or a truncated
+  // response still consumed tokens and still costs money — billing that only
+  // covers successful extractions under-reports exactly when something is
+  // going wrong and you most want the number.
+  await recordUsage(message, model, response);
 
   // A refusal is a normal HTTP 200 with stop_reason set — not an exception —
   // so it has to be checked explicitly before trusting the content.
